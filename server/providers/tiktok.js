@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto'
 import { apiError, readJson, sleep } from '../http.js'
 import { captionFor } from '../caption.js'
 
@@ -52,8 +53,16 @@ export const tiktok = {
   scopes: 'user.info.basic,video.publish',
   envKeys: { clientId: 'TIKTOK_CLIENT_KEY', clientSecret: 'TIKTOK_CLIENT_SECRET', redirectUri: 'TIKTOK_REDIRECT_URI' },
   developerUrl: 'https://developers.tiktok.com/apps',
+  usesPkce: true,
 
-  authorizationUrl({ config, state }) {
+  // TikTok expects the S256 challenge hex-encoded, not base64url like RFC 7636.
+  pkcePair() {
+    const verifier = randomBytes(32).toString('base64url')
+    const challenge = createHash('sha256').update(verifier).digest('hex')
+    return { verifier, challenge }
+  },
+
+  authorizationUrl({ config, state, codeChallenge }) {
     const url = new URL('https://www.tiktok.com/v2/auth/authorize/')
     url.search = new URLSearchParams({
       client_key: config.clientId,
@@ -61,17 +70,20 @@ export const tiktok = {
       response_type: 'code',
       redirect_uri: config.redirectUri,
       state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
     }).toString()
     return url.toString()
   },
 
-  async exchangeCode(ctx, { code }) {
+  async exchangeCode(ctx, { code, codeVerifier }) {
     const tokens = await exchangeToken(ctx, {
       client_key: ctx.config.clientId,
       client_secret: ctx.config.clientSecret,
       code,
       grant_type: 'authorization_code',
       redirect_uri: ctx.config.redirectUri,
+      code_verifier: codeVerifier,
     })
     if (!String(tokens.scope || '').split(',').includes('video.publish')) {
       throw apiError(400, 'TIKTOK_SCOPE_MISSING', 'TikTok app/user ne required video.publish scope approve nahi kiya.')

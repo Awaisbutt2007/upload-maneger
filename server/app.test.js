@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -152,9 +153,14 @@ test('OAuth callback stores tokens on the server and status reads real account i
   }))
 
   try {
-    const { cookie, callback } = await connect(baseUrl, 'tiktok')
+    const { cookie, callback, authorizationUrl } = await connect(baseUrl, 'tiktok')
     assert.equal(callback.status, 302)
     assert.equal(callback.headers.get('location'), '/?oauth=connected&provider=tiktok')
+
+    const challenge = new URL(authorizationUrl).searchParams
+    assert.equal(challenge.get('code_challenge_method'), 'S256')
+    const verifier = new URLSearchParams(calls.find(call => call.url.endsWith('/v2/oauth/token/')).options.body).get('code_verifier')
+    assert.equal(challenge.get('code_challenge'), createHash('sha256').update(verifier).digest('hex'))
 
     const { platforms } = await fetch(`${baseUrl}/api/platforms`, { headers: { cookie } }).then(response => response.json())
     assert.equal(platforms.tiktok.connected, true)

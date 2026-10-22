@@ -200,7 +200,7 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
       const current = getSession(req, true)
       const state = randomBytes(24).toString('hex')
       const redirectUri = redirectUriFor(provider.id, req)
-      const pkce = provider.usesPkce ? pkcePair() : null
+      const pkce = provider.usesPkce ? (provider.pkcePair?.() || pkcePair()) : null
       oauthStates.set(state, {
         provider: provider.id,
         sessionId: current.id,
