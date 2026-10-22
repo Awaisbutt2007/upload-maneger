@@ -326,6 +326,9 @@
 }
 
 .profile-card {
+  width: 100%;
+  font-family: inherit;
+  text-align: left;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -380,6 +383,7 @@
 }
 
 .profile-info {
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -393,6 +397,9 @@
 }
 
 .profile-role {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 12px;
   font-weight: 500;
   color: var(--accent-1);

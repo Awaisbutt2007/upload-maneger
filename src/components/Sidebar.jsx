@@ -3,10 +3,15 @@ import {
 } from 'react-icons/fa'
 import './Sidebar.css'
 
-function Sidebar({ active, setActive, collapsed, setCollapsed }) {
+function initials(name = '') {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] || 'PM').slice(0, 2)).toUpperCase()
+}
+
+function Sidebar({ active, setActive, collapsed, setCollapsed, runningCount = 0, profile = {} }) {
   const topItems = [
-    { id: 'upload', label: 'Upload', icon: FaUpload, badge: 3 },
-    { id: 'inbox', label: 'Inbox', icon: FaInbox, badge: 12 },
+    { id: 'upload', label: 'Upload', icon: FaUpload, badge: runningCount || null, badgeTitle: `${runningCount} post publish ho rahi hain` },
+    { id: 'inbox', label: 'Inbox', icon: FaInbox },
   ]
   const midItems = [
     { id: 'analytics', label: 'Analytics', icon: FaChartLine },
@@ -24,6 +29,8 @@ function Sidebar({ active, setActive, collapsed, setCollapsed }) {
         key={item.id}
         className={`nav-item ${isActive ? 'active' : ''}`}
         onClick={() => setActive(item.id)}
+        title={collapsed ? item.label : undefined}
+        aria-current={isActive ? 'page' : undefined}
         style={{ animationDelay: `${idxGlobal * 0.06}s` }}
       >
         <div className="nav-icon-wrap">
@@ -35,7 +42,7 @@ function Sidebar({ active, setActive, collapsed, setCollapsed }) {
           <>
             <span className="nav-label">{item.label}</span>
             {item.badge && (
-              <span className="nav-badge">{item.badge}</span>
+              <span className="nav-badge" title={item.badgeTitle}>{item.badge}</span>
             )}
           </>
         )}
@@ -72,6 +79,7 @@ function Sidebar({ active, setActive, collapsed, setCollapsed }) {
             className="collapse-btn"
             onClick={() => setCollapsed(!collapsed)}
             title={collapsed ? 'Expand' : 'Collapse'}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {collapsed ? <FaChevronRight /> : <FaChevronLeft />}
           </button>
@@ -100,16 +108,16 @@ function Sidebar({ active, setActive, collapsed, setCollapsed }) {
           </div>
 
           {!collapsed && (
-            <div className="profile-card">
+            <button type="button" className="profile-card" onClick={() => setActive('settings')} title="Profile settings">
               <div className="avatar">
-                <span className="avatar-initials">PM</span>
+                <span className="avatar-initials">{initials(profile.name)}</span>
                 <span className="avatar-status" />
               </div>
               <div className="profile-info">
-                <span className="profile-name">Admin</span>
-                <span className="profile-role">Pro Plan</span>
+                <span className="profile-name">{profile.name || 'Admin'}</span>
+                <span className="profile-role">{profile.email || 'Platform Manager'}</span>
               </div>
-            </div>
+            </button>
           )}
         </div>
       </div>

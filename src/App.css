@@ -108,7 +108,6 @@
 
 .glass-card:hover {
   border-color: color-mix(in srgb, var(--accent-1) 35%, transparent);
-  transform: translateY(-2px);
   box-shadow: 0 16px 56px color-mix(in srgb, var(--accent-1) 10%, transparent);
 }
 
@@ -254,6 +253,10 @@
   background: radial-gradient(circle at top right, color-mix(in srgb, var(--accent-1) 18%, transparent), transparent 70%);
   transition: all 0.5s ease;
   pointer-events: none;
+}
+
+.stat-card:hover {
+  transform: translateY(-4px);
 }
 
 .stat-card:hover::after {

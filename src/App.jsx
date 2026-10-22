@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Sidebar from './components/Sidebar'
 import Upload from './pages/Upload'
 import Inbox from './pages/Inbox'
 import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
+import { api } from './api'
+import { PLATFORM_BY_ID } from './platforms'
 import './App.css'
 
 const THEMES = {
@@ -15,13 +17,10 @@ const THEMES = {
   mono:     { a1: '#64748b', a2: '#1e293b', a3: '#94a3b8', name: 'Mono' },
 }
 
-const DEFAULT_LINKS = {
-  tiktok:    { url: '', connected: false, accessToken: '', refreshToken: '', userHandle: '', postUrlTemplate: 'https://www.tiktok.com/@{handle}/video/{id}', expiresAt: null, authStatus: 'disconnected', clientKey: '' },
-  instagram: { url: '', connected: false, accessToken: '', refreshToken: '', userHandle: '', postUrlTemplate: 'https://www.instagram.com/p/{id}/', expiresAt: null, authStatus: 'disconnected', clientKey: '' },
-  linkedin:  { url: '', connected: false, accessToken: '', refreshToken: '', userHandle: '', postUrlTemplate: 'https://www.linkedin.com/feed/update/{id}/', expiresAt: null, authStatus: 'disconnected', clientKey: '' },
-  twitter:   { url: '', connected: false, accessToken: '', refreshToken: '', userHandle: '', postUrlTemplate: 'https://twitter.com/{handle}/status/{id}', expiresAt: null, authStatus: 'disconnected', clientKey: '' },
-  whatsapp:  { url: '', connected: false, accessToken: '', refreshToken: '', userHandle: '', postUrlTemplate: 'https://whatsapp.com/channel/{handle}/{id}', expiresAt: null, authStatus: 'disconnected', clientKey: '' },
-}
+const STORAGE_KEY = 'platform-manager-state-v1'
+const DEFAULT_PROFILE = { name: 'Admin', email: '' }
+const DEFAULT_POST_DEFAULTS = { tags: [], locationName: '', placeId: '', targets: null }
+const DEFAULT_PREFS = { desktopNotify: false, sound: true, reducedMotion: false }
 
 function hexToRgb(hex) {
   const h = hex.replace('#', '')
@@ -31,54 +30,72 @@ function hexToRgb(hex) {
   return `${r}, ${g}, ${b}`
 }
 
+function usePersistentState(key, fallback) {
+  const [value, setValue] = useState(() => {
+    try {
+      const raw = localStorage.getItem(`${STORAGE_KEY}:${key}`)
+      if (raw === null) return fallback
+      const parsed = JSON.parse(raw)
+      return fallback && typeof fallback === 'object' && !Array.isArray(fallback) ? { ...fallback, ...parsed } : parsed
+    } catch { return fallback }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(`${STORAGE_KEY}:${key}`, JSON.stringify(value)) } catch {}
+  }, [key, value])
+  return [value, setValue]
+}
+
+function playChime() {
+  try {
+    const context = new AudioContext()
+    const oscillator = context.createOscillator()
+    const gain = context.createGain()
+    oscillator.frequency.value = 880
+    gain.gain.setValueAtTime(0.12, context.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.5)
+    oscillator.connect(gain).connect(context.destination)
+    oscillator.start()
+    oscillator.stop(context.currentTime + 0.5)
+  } catch {}
+}
+
 function App() {
-  const STORAGE_KEY = 'platform-manager-state-v1'
+  const [active, setActive] = usePersistentState('page', 'upload')
+  const [collapsed, setCollapsed] = usePersistentState('sidebarCollapsed', false)
+  const [themeId, setThemeId] = usePersistentState('theme', 'aqua')
+  const [profile, setProfile] = usePersistentState('profile', DEFAULT_PROFILE)
+  const [postDefaults, setPostDefaults] = usePersistentState('postDefaults', DEFAULT_POST_DEFAULTS)
+  const [prefs, setPrefs] = usePersistentState('prefs', DEFAULT_PREFS)
+  const [transfers, setTransfers] = usePersistentState('transfers-v2', [])
+  const [platformState, setPlatformState] = useState({ loading: true, providers: [], platforms: {}, canConfigure: false, error: '' })
+  const [flash, setFlash] = useState(null)
+  const prefsRef = useRef(prefs)
+  prefsRef.current = prefs
+  const transfersRef = useRef(transfers)
+  transfersRef.current = transfers
 
-  const [active, setActive] = useState(() => {
-    try { return localStorage.getItem(STORAGE_KEY + ':active') || 'upload' }
-    catch { return 'upload' }
-  })
-  const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem(STORAGE_KEY + ':collapsed') === '1' }
-    catch { return false }
-  })
-  const [themeId, setThemeId] = useState(() => {
-    try { return localStorage.getItem(STORAGE_KEY + ':themeId') || 'aqua' }
-    catch { return 'aqua' }
-  })
-  const [links, setLinks] = useState(() => {
+  const refreshPlatforms = useCallback(async () => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY + ':links')
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        return { ...DEFAULT_LINKS, ...parsed }
-      }
-    } catch {}
-    return DEFAULT_LINKS
-  })
-  const [transfers, setTransfers] = useState(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY + ':transfers')
-      if (raw) return JSON.parse(raw)
-    } catch {}
-    return []
-  })
+      const data = await api('/api/platforms')
+      setPlatformState({ loading: false, error: '', ...data })
+    } catch (error) {
+      setPlatformState(previous => ({ ...previous, loading: false, error: error.message }))
+    }
+  }, [])
 
+  useEffect(() => { refreshPlatforms() }, [refreshPlatforms])
+
+  // Returning from a platform's OAuth screen lands on /?oauth=...; show the result in Settings.
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY + ':active', active) } catch {}
-  }, [active])
-  useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY + ':collapsed', collapsed ? '1' : '0') } catch {}
-  }, [collapsed])
-  useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY + ':themeId', themeId) } catch {}
-  }, [themeId])
-  useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY + ':links', JSON.stringify(links)) } catch {}
-  }, [links])
-  useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY + ':transfers', JSON.stringify(transfers)) } catch {}
-  }, [transfers])
+    const query = new URLSearchParams(window.location.search)
+    if (!query.has('oauth')) return
+    const provider = query.get('provider') || ''
+    setFlash(query.get('oauth') === 'connected'
+      ? { type: 'ok', msg: `${provider === 'meta' ? 'Facebook/Instagram' : PLATFORM_BY_ID[provider]?.label || provider} connect ho gaya!` }
+      : { type: 'error', msg: query.get('message') || 'Authorization fail ho gayi.' })
+    setActive('settings')
+    window.history.replaceState({}, '', window.location.pathname)
+  }, [setActive])
 
   useEffect(() => {
     const t = THEMES[themeId] || THEMES.aqua
@@ -94,26 +111,89 @@ function App() {
     root.style.setProperty('--orb-3', `rgba(${hexToRgb(t.a3)}, 0.2)`)
   }, [themeId])
 
+  useEffect(() => {
+    document.documentElement.classList.toggle('reduce-motion', Boolean(prefs.reducedMotion))
+  }, [prefs.reducedMotion])
+
+  const notifyFinished = useCallback((job, transfer) => {
+    const results = Object.entries(job.platforms)
+    const ok = results.filter(([, entry]) => entry.status === 'done').map(([id]) => PLATFORM_BY_ID[id]?.label || id)
+    const failed = results.filter(([, entry]) => entry.status === 'failed').map(([id]) => PLATFORM_BY_ID[id]?.label || id)
+    if (prefsRef.current.sound) playChime()
+    if (prefsRef.current.desktopNotify && 'Notification' in window && Notification.permission === 'granted') {
+      const body = [ok.length ? `Published: ${ok.join(', ')}` : '', failed.length ? `Failed: ${failed.join(', ')}` : ''].filter(Boolean).join(' · ')
+      try { new Notification(`"${transfer.title || transfer.name}" upload complete`, { body }) } catch {}
+    }
+  }, [])
+
+  // Poll the server for every post that is still being published.
+  const runningKey = transfers.filter(transfer => transfer.status === 'running').map(transfer => transfer.id).join('|')
+  useEffect(() => {
+    if (!runningKey) return undefined
+    let stopped = false
+    const poll = async () => {
+      for (const id of runningKey.split('|')) {
+        try {
+          const { job } = await api(`/api/publish/${id}`)
+          if (stopped) return
+          const existing = transfersRef.current.find(transfer => transfer.id === id)
+          if (existing?.status === 'running' && job.status !== 'running') notifyFinished(job, existing)
+          setTransfers(previous => previous.map(transfer => transfer.id !== id ? transfer : {
+            ...transfer, status: job.status, platforms: job.platforms, finishedAt: job.finishedAt,
+          }))
+        } catch (error) {
+          if (stopped || error.status !== 404) continue
+          setTransfers(previous => previous.map(transfer => transfer.id !== id ? transfer : {
+            ...transfer,
+            status: 'failed',
+            platforms: Object.fromEntries(Object.entries(transfer.platforms).map(([pid, entry]) => [pid,
+              ['done', 'failed'].includes(entry.status) ? entry : { ...entry, status: 'failed', error: 'Server par yeh job nahi mili.' }])),
+          }))
+        }
+      }
+    }
+    poll()
+    const timer = setInterval(poll, 3000)
+    return () => { stopped = true; clearInterval(timer) }
+  }, [runningKey, setTransfers, notifyFinished])
+
+  const runningCount = transfers.filter(transfer => transfer.status === 'running').length
+  const shared = { platformState, refreshPlatforms, setActive }
+
   const renderPage = () => {
     switch (active) {
-      case 'upload':
-        return <Upload links={links} transfers={transfers} setTransfers={setTransfers} />
       case 'inbox':
-        return <Inbox links={links} />
+        return <Inbox {...shared} transfers={transfers} />
       case 'analytics':
-        return <Analytics />
+        return <Analytics transfers={transfers} />
       case 'settings':
         return (
           <Settings
+            {...shared}
             themeId={themeId}
             setThemeId={setThemeId}
             themes={THEMES}
-            links={links}
-            setLinks={setLinks}
+            profile={profile}
+            setProfile={setProfile}
+            postDefaults={postDefaults}
+            setPostDefaults={setPostDefaults}
+            prefs={prefs}
+            setPrefs={setPrefs}
+            setTransfers={setTransfers}
+            flash={flash}
+            clearFlash={() => setFlash(null)}
           />
         )
       default:
-        return <Upload links={links} transfers={transfers} setTransfers={setTransfers} />
+        return (
+          <Upload
+            {...shared}
+            transfers={transfers}
+            setTransfers={setTransfers}
+            postDefaults={postDefaults}
+            setPostDefaults={setPostDefaults}
+          />
+        )
     }
   }
 
@@ -128,6 +208,8 @@ function App() {
         setActive={setActive}
         collapsed={collapsed}
         setCollapsed={setCollapsed}
+        runningCount={runningCount}
+        profile={profile}
       />
 
       <main className={`main-content ${collapsed ? 'collapsed' : ''}`}>

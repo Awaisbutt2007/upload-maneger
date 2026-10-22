@@ -1,261 +1,322 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
-  FaUser, FaBell, FaShieldAlt, FaPalette, FaCloud, FaKey,
-  FaToggleOn, FaToggleOff, FaSave, FaLanguage, FaExclamationTriangle,
-  FaLink, FaCheck, FaExternalLinkAlt, FaPlug, FaClock, FaSpinner,
-  FaInfoCircle, FaUnlock, FaSync, FaEye, FaEyeSlash, FaExclamationCircle
+  FaUser, FaBell, FaPalette, FaLink, FaHashtag, FaExclamationTriangle, FaCheck, FaExternalLinkAlt,
+  FaPlug, FaSpinner, FaInfoCircle, FaUnlock, FaEye, FaEyeSlash, FaExclamationCircle, FaCopy, FaSave,
+  FaKey, FaMapMarkerAlt, FaVolumeUp,
 } from 'react-icons/fa'
-import { FaTiktok, FaInstagram, FaLinkedin, FaTwitter, FaWhatsapp } from 'react-icons/fa6'
+import { api } from '../api'
+import { PLATFORMS, PLATFORM_BY_ID, PROVIDER_HELP, displayHandle } from '../platforms'
 import './pages.css'
 
 const tabs = [
-  { id: 'profile', label: 'Profile', icon: FaUser },
-  { id: 'notifications', label: 'Notifications', icon: FaBell },
-  { id: 'appearance', label: 'Appearance', icon: FaPalette },
-  { id: 'links', label: 'Links', icon: FaLink },
-  { id: 'security', label: 'Security', icon: FaShieldAlt },
-  { id: 'storage', label: 'Storage', icon: FaCloud },
+  { id: 'accounts', label: 'Accounts', icon: FaLink, subtitle: 'Social media accounts connect karein' },
+  { id: 'defaults', label: 'Post Defaults', icon: FaHashtag, subtitle: 'Har upload par pehle se bhare tags, location aur platforms' },
+  { id: 'profile', label: 'Profile', icon: FaUser, subtitle: 'Sidebar mein dikhne wala naam' },
+  { id: 'notifications', label: 'Notifications', icon: FaBell, subtitle: 'Post publish hone par alert' },
+  { id: 'appearance', label: 'Appearance', icon: FaPalette, subtitle: 'Theme aur animations' },
 ]
 
-const PLATFORMS = [
-  {
-    id: 'tiktok', label: 'TikTok', Icon: FaTiktok,
-    color: '#000000', accent: '#ff0050', placeholder: 'https://tiktok.com/@yourname',
-    hint: 'Kisi bhi video ko auto-publish karne ke liye connect karein',
-    oauthHint: 'TikTok OAuth 2.0 — Content Post API',
-    requiresClientKey: true,
-    scopes: 'video.publish,user.info.basic,video.upload',
-    uploadEndpoint: '/v2/post/publish/video/init/',
-    docsLink: 'https://developers.tiktok.com/doc/content-posting-api-overview',
-  },
-  {
-    id: 'instagram', label: 'Instagram', Icon: FaInstagram,
-    color: '#E1306C', accent: '#f77737', placeholder: 'https://instagram.com/yourname',
-    hint: 'Photos, reels aur stories sab yahan se upload honge',
-    oauthHint: 'Facebook Graph API — IG Media Publishing',
-    requiresClientKey: true,
-    scopes: 'publish_video,publish_to_story',
-    uploadEndpoint: '/v20.0/{ig_user_id}/media',
-    docsLink: 'https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/content-publishing',
-  },
-  {
-    id: 'linkedin', label: 'LinkedIn', Icon: FaLinkedin,
-    color: '#0A66C2', accent: '#0077b5', placeholder: 'https://linkedin.com/in/yourname',
-    hint: 'Professional posts aur documents publish karein',
-    oauthHint: 'LinkedIn Marketing API — UGC Posts',
-    requiresClientKey: true,
-    scopes: 'w_member_social,r_liteprofile',
-    uploadEndpoint: '/v2/ugcPosts',
-    docsLink: 'https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/share-on-linkedin',
-  },
-  {
-    id: 'twitter', label: 'Twitter / X', Icon: FaTwitter,
-    color: '#000000', accent: '#1da1f2', placeholder: 'https://twitter.com/yourname',
-    hint: 'Tweets, threads aur media ek click mein share karein',
-    oauthHint: 'X API v2 — OAuth 1.0a + v2 manage_tweets',
-    requiresClientKey: true,
-    scopes: 'tweet.read,tweet.write,users.read',
-    uploadEndpoint: '/2/tweets',
-    docsLink: 'https://developer.x.com/en/docs/twitter-api/tweets/manage-tweets/introduction',
-  },
-  {
-    id: 'whatsapp', label: 'WhatsApp Channel', Icon: FaWhatsapp,
-    color: '#25D366', accent: '#128c7e', placeholder: 'https://whatsapp.com/channel/xxx',
-    hint: 'Channel subscribers ko automatic updates bhejein',
-    oauthHint: 'WhatsApp Business Cloud API — Channel Messages',
-    requiresClientKey: true,
-    scopes: 'business_management,whatsapp_business_messaging',
-    uploadEndpoint: '/v18.0/{phone_number_id}/messages',
-    docsLink: 'https://business.whatsapp.com/products/business-platform/',
-  },
-]
-
-function Settings({ themeId, setThemeId, themes, links, setLinks }) {
-  const [tab, setTab] = useState('profile')
-  const [toast, setToast] = useState(null)
-  const [toggles, setToggles] = useState({
-    emailNotif: true, pushNotif: true, marketing: false, weeklyDigest: true,
-    twoFactor: false, autoUpdate: true, telemetry: false, beta: false,
-    sound: true, desktop: false,
-  })
-  const [linksDraft, setLinksDraft] = useState(links)
-  const [tokenVisible, setTokenVisible] = useState({})
-  const [connecting, setConnecting] = useState({})
-  const [expanded, setExpanded] = useState({})
-
-  const showToast = (msg, type = 'ok') => {
-    setToast({ msg, type })
-    setTimeout(() => setToast(null), 3400)
-  }
-
-  const saveAll = () => {
-    setLinks(linksDraft)
-    showToast('Settings saved successfully!', 'ok')
-  }
-
-  const updateLinkField = (id, field, value) =>
-    setLinksDraft(p => ({ ...p, [id]: { ...p[id], [field]: value } }))
-
-  const extractHandle = (pid, url) => {
-    try {
-      const u = (url || '').replace(/\/$/, '')
-      if (!u) return ''
-      if (pid === 'tiktok') {
-        const m = u.match(/@([A-Za-z0-9_.]+)/)
-        return m ? m[1] : ''
-      }
-      if (pid === 'instagram') {
-        const m = u.match(/instagram\.com\/([A-Za-z0-9_.]+)/)
-        return m ? m[1] : ''
-      }
-      if (pid === 'twitter') {
-        const m = u.match(/twitter\.com\/([A-Za-z0-9_]+)/)
-        return m ? m[1] : ''
-      }
-      if (pid === 'linkedin') {
-        const m = u.match(/linkedin\.com\/in\/([A-Za-z0-9_-]+)/)
-        return m ? m[1] : ''
-      }
-      if (pid === 'whatsapp') {
-        const m = u.match(/channel\/([A-Za-z0-9_-]+)/)
-        return m ? m[1] : ''
-      }
-    } catch {}
-    return ''
-  }
-
-  const toggleTokenVisibility = (id) => {
-    setTokenVisible(p => ({ ...p, [id]: !p[id] }))
-  }
-
-  const startOAuthFlow = async (id, meta) => {
-    if (connecting[id]) return
-    setConnecting(p => ({ ...p, [id]: true }))
-    setExpanded(p => ({ ...p, [id]: true }))
-    let current = linksDraft[id] || {}
-
-    try {
-      showToast(`Connecting to ${meta.label}... (${meta.oauthHint || 'OAuth flow'})`, 'info')
-
-      await new Promise(r => setTimeout(r, 900))
-
-      if (!current.url || current.url.trim().length < 4) {
-        setConnecting(p => ({ ...p, [id]: false }))
-        showToast(`Pehle ${meta.label} profile URL enter karein`, 'error')
-        return
-      }
-
-      await new Promise(r => setTimeout(r, 700))
-
-      const needsClientKey = meta.requiresClientKey
-      if (needsClientKey && (!current.clientKey || current.clientKey.trim().length < 6)) {
-        setConnecting(p => ({ ...p, [id]: false }))
-        showToast(`Client Key enter karein (${meta.label} Developers dashboard se milta hai)`, 'error')
-        return
-      }
-
-      if (!current.accessToken || current.accessToken.trim().length < 8) {
-        await new Promise(r => setTimeout(r, 1100))
-        const fakeToken = meta.id + '_' + Math.random().toString(36).slice(2) + '_' + Date.now().toString(36) + '_acc_' + btoa(Math.random().toString(36)).slice(0, 14)
-        const fakeRefresh = meta.id + '_ref_' + Math.random().toString(36).slice(2) + btoa(Date.now().toString(36)).slice(0, 20)
-        const handle = extractHandle(meta.id, current.url) || `user_${Math.random().toString(36).slice(2, 7)}`
-        current = {
-          ...current,
-          accessToken: current.accessToken || fakeToken,
-          refreshToken: fakeRefresh,
-          userHandle: handle,
-          expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 59,
-        }
-        setLinksDraft(p => ({ ...p, [id]: current }))
-        showToast(`${meta.label} account verified — @${handle}`, 'ok')
-      }
-
-      await new Promise(r => setTimeout(r, 600))
-      current = {
-        ...current,
-        connected: true,
-        authStatus: 'connected',
-      }
-      setLinksDraft(p => ({ ...p, [id]: current }))
-      showToast(`${meta.label} successfully linked! Auto-publish enabled.`, 'ok')
-    } catch (e) {
-      showToast(`${meta.label} connection failed: ${e.message || 'Unknown error'}`, 'error')
-    } finally {
-      setConnecting(p => ({ ...p, [id]: false }))
-    }
-  }
-
-  const disconnectPlatform = (id, meta) => {
-    setLinksDraft(p => ({
-      ...p,
-      [id]: {
-        ...p[id],
-        connected: false,
-        authStatus: 'disconnected',
-        expiresAt: null,
-      },
-    }))
-    showToast(`${meta.label} disconnected`, 'info')
-  }
-
-  const Toggle = ({ id, label, sub }) => (
+function Toggle({ checked, onChange, label, sub }) {
+  return (
     <div className="toggle-row">
       <div className="toggle-info">
         <div className="toggle-label">{label}</div>
         {sub && <div className="toggle-sub">{sub}</div>}
       </div>
-      <button
-        className={`toggle-switch ${toggles[id] ? 'on' : ''}`}
-        onClick={() => setToggles(p => ({ ...p, [id]: !p[id] }))}
-      >
-        {toggles[id] ? <FaToggleOn /> : <FaToggleOff />}
-      </button>
+      <button type="button" role="switch" aria-checked={checked} aria-label={label} className={`toggle-switch ${checked ? 'on' : ''}`} onClick={() => onChange(!checked)} />
     </div>
   )
+}
 
-  const activeTab = tabs.find(t => t.id === tab)
-  const ActiveIcon = activeTab?.icon || FaUser
+function ProviderCard({ provider, platforms, canConfigure, showToast, refreshPlatforms }) {
+  const linkedPlatforms = provider.platforms.map(id => ({ meta: PLATFORM_BY_ID[id], info: platforms[id] || {} }))
+  const anyConnected = linkedPlatforms.some(item => item.info.connected)
+  const [expanded, setExpanded] = useState(!provider.configured)
+  const [busy, setBusy] = useState('')
+  const [form, setForm] = useState({ clientId: '', clientSecret: '' })
+  const [secretVisible, setSecretVisible] = useState(false)
+  const help = PROVIDER_HELP[provider.id]
+  const MainIcon = linkedPlatforms[0].meta.Icon
+  const pageOptions = linkedPlatforms[0].info.options?.pages || []
 
-  const themeList = [
-    { id: 'aqua', name: 'Aqua', a: '#06b6d4', b: '#14b8a6' },
-    { id: 'emerald', name: 'Emerald', a: '#10b981', b: '#059669' },
-    { id: 'sunset', name: 'Sunset', a: '#f59e0b', b: '#ef4444' },
-    { id: 'sky', name: 'Sky', a: '#0ea5e9', b: '#6366f1' },
-    { id: 'rose', name: 'Rose', a: '#f43f5e', b: '#ec4899' },
-    { id: 'mono', name: 'Mono', a: '#64748b', b: '#1e293b' },
-  ]
+  const connect = async () => {
+    setBusy('connect')
+    try {
+      const { authorizationUrl } = await api(`/api/${provider.id}/oauth/start`, { method: 'POST' })
+      window.location.assign(authorizationUrl)
+    } catch (error) {
+      showToast(error.message, 'error')
+      setBusy('')
+    }
+  }
+
+  const disconnect = async () => {
+    setBusy('disconnect')
+    try {
+      await api(`/api/${provider.id}/disconnect`, { method: 'POST' })
+      await refreshPlatforms()
+      showToast(`${provider.label} disconnect ho gaya.`, 'info')
+    } catch (error) {
+      showToast(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const saveConfig = async event => {
+    event.preventDefault()
+    setBusy('config')
+    try {
+      await api(`/api/${provider.id}/config`, { method: 'POST', body: form })
+      setForm({ clientId: '', clientSecret: '' })
+      await refreshPlatforms()
+      showToast(`${provider.label} credentials save ho gayi. Ab Connect dabayein.`, 'ok')
+    } catch (error) {
+      showToast(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const selectPage = async pageId => {
+    setBusy('page')
+    try {
+      await api('/api/meta/page', { method: 'POST', body: { pageId } })
+      await refreshPlatforms()
+      showToast('Facebook Page select ho gaya.', 'ok')
+    } catch (error) {
+      showToast(error.message, 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const copy = async text => {
+    try { await navigator.clipboard.writeText(text); showToast('Redirect URI copy ho gaya.', 'ok') }
+    catch { showToast('Copy nahi ho saka — khud select karke copy karein.', 'error') }
+  }
+
+  return (
+    <div className={`platform-card advanced ${anyConnected ? 'connected' : ''} ${expanded ? 'expanded' : ''}`}>
+      <div className="platform-card-top">
+        <div className="platform-icon" style={{ background: linkedPlatforms[0].meta.gradient }}>
+          <MainIcon />
+        </div>
+
+        <div className="platform-info">
+          <div className="platform-head">
+            <h4 className="platform-name">{provider.label}</h4>
+            {!provider.configured && <span className="badge badge-amber">Setup needed</span>}
+          </div>
+          <div className="provider-status">
+            {linkedPlatforms.map(({ meta, info }) => {
+              const { Icon } = meta
+              return (
+                <span key={meta.id} className={`badge ${info.connected ? 'badge-green' : info.error ? 'badge-amber' : 'badge-slate'}`} title={info.error?.message}>
+                  <Icon /> {meta.label}: {info.connected ? displayHandle(meta.id, info.username) || 'Connected' : info.error ? 'Action needed' : 'Not connected'}
+                </span>
+              )
+            })}
+          </div>
+          {linkedPlatforms.filter(item => item.info.error).map(({ meta, info }) => (
+            <div key={meta.id} className="provider-error"><FaExclamationTriangle /> {meta.label}: {info.error.message}</div>
+          ))}
+        </div>
+
+        <div className="provider-actions">
+          <button type="button" className="btn btn-ghost" onClick={() => setExpanded(value => !value)} aria-expanded={expanded}>
+            {expanded ? 'Hide setup' : 'Setup'}
+          </button>
+          {provider.accountLinked ? (
+            <>
+              <button type="button" className="btn btn-secondary" disabled={!!busy || !provider.configured} onClick={connect} title="Permissions dobara approve karein">
+                {busy === 'connect' ? <FaSpinner className="spin" /> : <FaUnlock />} Reconnect
+              </button>
+              <button type="button" className="btn btn-secondary" disabled={!!busy} onClick={disconnect}>
+                {busy === 'disconnect' ? <FaSpinner className="spin" /> : <FaPlug />} Disconnect
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn btn-primary" disabled={!!busy || !provider.configured} onClick={connect} title={provider.configured ? '' : 'Pehle Setup mein credentials save karein'}>
+              {busy === 'connect' ? <FaSpinner className="spin" /> : <FaUnlock />} Connect
+            </button>
+          )}
+        </div>
+      </div>
+
+      {provider.id === 'meta' && pageOptions.length > 1 && (
+        <div className="page-picker">
+          <label className="adv-label" htmlFor="meta-page">Facebook Page (Instagram isi Page se linked hona chahiye)</label>
+          <select id="meta-page" className="form-input" value={linkedPlatforms[0].info.options?.selectedPageId || ''} disabled={!!busy} onChange={event => selectPage(event.target.value)}>
+            {pageOptions.map(page => (
+              <option key={page.id} value={page.id}>{page.name}{page.instagram ? ` · IG @${page.instagram}` : ' · no Instagram'}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {expanded && (
+        <div className="platform-card-expand">
+          <div className="setup-help">
+            <div className="setup-help-title">{help.title}</div>
+            <ol>
+              {help.steps.map(step => <li key={step}>{step}</li>)}
+            </ol>
+            <a href={provider.developerUrl} target="_blank" rel="noreferrer" className="link-hover setup-link">
+              Developer portal kholein <FaExternalLinkAlt style={{ display: 'inline' }} />
+            </a>
+          </div>
+
+          <label className="adv-label"><FaLink /> Redirect URI (developer app mein exactly yahi register karein)</label>
+          <div className="adv-input-wrap">
+            <input className="form-input mono" readOnly value={provider.redirectUri} onFocus={event => event.target.select()} />
+            <button type="button" className="adv-suffix-btn" onClick={() => copy(provider.redirectUri)} title="Copy" aria-label="Copy redirect URI"><FaCopy /></button>
+          </div>
+          <div className="adv-scopes">Scopes: <code>{provider.scopes}</code></div>
+
+          {canConfigure ? (
+            <form className="adv-grid" onSubmit={saveConfig} style={{ marginTop: 16 }}>
+              <div className="adv-field">
+                <label className="adv-label" htmlFor={`${provider.id}-client-id`}><FaKey /> {provider.id === 'tiktok' ? 'Client Key' : provider.id === 'meta' ? 'App ID' : 'Client ID'}</label>
+                <input
+                  id={`${provider.id}-client-id`}
+                  className="form-input"
+                  autoComplete="off"
+                  value={form.clientId}
+                  onChange={event => setForm(previous => ({ ...previous, clientId: event.target.value }))}
+                  placeholder={provider.configured ? 'Saved — badalne ke liye naya dalein' : 'Developer portal se copy karein'}
+                  required
+                />
+              </div>
+              <div className="adv-field">
+                <label className="adv-label" htmlFor={`${provider.id}-client-secret`}><FaKey /> {provider.id === 'meta' ? 'App Secret' : 'Client Secret'}</label>
+                <div className="adv-input-wrap">
+                  <input
+                    id={`${provider.id}-client-secret`}
+                    className="form-input"
+                    type={secretVisible ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    value={form.clientSecret}
+                    onChange={event => setForm(previous => ({ ...previous, clientSecret: event.target.value }))}
+                    placeholder="Server par save hoga, browser mein nahi"
+                    required
+                  />
+                  <button type="button" className="adv-suffix-btn" onClick={() => setSecretVisible(value => !value)} title={secretVisible ? 'Hide secret' : 'Show secret'} aria-label={secretVisible ? 'Hide secret' : 'Show secret'}>
+                    {secretVisible ? <FaEyeSlash /> : <FaEye />}
+                  </button>
+                </div>
+              </div>
+              <div className="adv-field full">
+                <button className="btn btn-primary" type="submit" disabled={busy === 'config'}>
+                  {busy === 'config' ? <FaSpinner className="spin" /> : <FaSave />} Save credentials
+                </button>
+                {provider.configured && <span className="badge badge-green" style={{ marginLeft: 10 }}><FaCheck /> Credentials saved</span>}
+              </div>
+            </form>
+          ) : (
+            <div className="adv-summary warn" style={{ marginTop: 16 }}>
+              Credentials form sirf local server (localhost) par khulta hai. Production mein hosting ke environment variables set karein (dekhein <code>.env.example</code>).
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Settings({
+  platformState, refreshPlatforms, themeId, setThemeId, themes, profile, setProfile, postDefaults, setPostDefaults,
+  prefs, setPrefs, setTransfers, flash, clearFlash,
+}) {
+  const [tab, setTab] = useState('accounts')
+  const [toast, setToast] = useState(null)
+  const [tagText, setTagText] = useState((postDefaults.tags || []).map(tag => `#${tag}`).join(' '))
+  const platforms = platformState.platforms || {}
+  const connectedCount = PLATFORMS.filter(platform => platforms[platform.id]?.connected).length
+
+  const showToast = (msg, type = 'ok') => setToast({ msg, type, at: Date.now() })
+
+  useEffect(() => {
+    if (!toast) return undefined
+    const timer = setTimeout(() => setToast(null), 4000)
+    return () => clearTimeout(timer)
+  }, [toast])
+
+  useEffect(() => {
+    if (!flash) return
+    showToast(flash.msg, flash.type)
+    clearFlash()
+    refreshPlatforms()
+  }, [flash])
+
+  const saveTags = text => {
+    const tags = [...new Set(text.split(/[\s,]+/).map(tag => tag.replace(/^#+/, '').replace(/[^\p{L}\p{N}_]/gu, '')).filter(Boolean))].slice(0, 30)
+    setPostDefaults(previous => ({ ...previous, tags }))
+    setTagText(tags.map(tag => `#${tag}`).join(' '))
+  }
+
+  const toggleDefaultTarget = id => setPostDefaults(previous => {
+    const current = previous.targets?.length ? previous.targets : PLATFORMS.filter(platform => platforms[platform.id]?.connected).map(platform => platform.id)
+    const next = current.includes(id) ? current.filter(item => item !== id) : [...current, id]
+    return { ...previous, targets: next }
+  })
+
+  const setDesktopNotify = async enabled => {
+    if (enabled && 'Notification' in window && Notification.permission !== 'granted') {
+      const permission = await Notification.requestPermission()
+      if (permission !== 'granted') {
+        showToast('Browser ne notification permission nahi di.', 'error')
+        return
+      }
+    }
+    if (enabled && !('Notification' in window)) {
+      showToast('Yeh browser desktop notifications support nahi karta.', 'error')
+      return
+    }
+    setPrefs(previous => ({ ...previous, desktopNotify: enabled }))
+  }
+
+  const resetAll = async () => {
+    if (!window.confirm('Saare accounts disconnect aur post history delete ho jayegi. Continue?')) return
+    await Promise.allSettled(platformState.providers.filter(provider => provider.accountLinked).map(provider => api(`/api/${provider.id}/disconnect`, { method: 'POST' })))
+    setTransfers([])
+    await refreshPlatforms()
+    showToast('Accounts disconnect aur history clear ho gayi.', 'info')
+  }
+
+  const activeTab = tabs.find(item => item.id === tab)
+  const ActiveIcon = activeTab.icon
+  const defaultTargets = postDefaults.targets?.length ? postDefaults.targets : PLATFORMS.filter(platform => platforms[platform.id]?.connected).map(platform => platform.id)
 
   return (
     <div>
       <header className="page-header">
         <div>
           <h1 className="page-title">Settings</h1>
-          <p className="page-subtitle">Manage your account and preferences</p>
+          <p className="page-subtitle">Har change khud-ba-khud save hota hai</p>
         </div>
-        <button className="btn btn-primary" onClick={saveAll}>
-          <FaSave /> Save Changes
-        </button>
       </header>
 
       {toast && (
-        <div className={`toast ${toast.type}`} style={{ animation: 'toastIn 0.4s ease both' }}>
-          <FaCheck /> {toast.msg}
+        <div className={`toast ${toast.type}`} role="status" style={{ animation: 'toastIn 0.4s ease both' }} key={toast.at}>
+          {toast.type === 'error' ? <FaExclamationCircle /> : toast.type === 'info' ? <FaInfoCircle /> : <FaCheck />} {toast.msg}
         </div>
       )}
 
       <div className="settings-layout">
         <div className="settings-tabs glass-card" style={{ animation: 'slideInLeft 0.5s ease both', animationDelay: '0.1s' }}>
-          {tabs.map((t, i) => {
-            const Icon = t.icon
+          {tabs.map((item, index) => {
+            const Icon = item.icon
             return (
               <button
-                key={t.id}
-                className={`settings-tab ${tab === t.id ? 'active' : ''}`}
-                onClick={() => setTab(t.id)}
-                style={{ animation: `fadeIn 0.4s ease both`, animationDelay: `${0.12 + i * 0.04}s` }}
+                key={item.id}
+                className={`settings-tab ${tab === item.id ? 'active' : ''}`}
+                onClick={() => setTab(item.id)}
+                style={{ animation: 'fadeIn 0.4s ease both', animationDelay: `${0.12 + index * 0.04}s` }}
               >
                 <Icon className="tab-icon" />
-                <span>{t.label}</span>
+                <span>{item.label}</span>
+                {item.id === 'accounts' && <span className="tab-count">{connectedCount}/{PLATFORMS.length}</span>}
               </button>
             )
           })}
@@ -264,9 +325,9 @@ function Settings({ themeId, setThemeId, themes, links, setLinks }) {
             <div className="danger-icon"><FaExclamationTriangle /></div>
             <div className="danger-text">
               <div className="danger-title">Danger Zone</div>
-              <div className="danger-sub">Irreversible account actions</div>
+              <div className="danger-sub">Sab disconnect + history clear</div>
             </div>
-            <button className="btn btn-ghost danger-btn">Delete</button>
+            <button className="btn btn-ghost danger-btn" onClick={resetAll}>Reset</button>
           </div>
         </div>
 
@@ -274,67 +335,134 @@ function Settings({ themeId, setThemeId, themes, links, setLinks }) {
           <div className="settings-head">
             <div className="settings-head-icon"><ActiveIcon /></div>
             <div>
-              <h2 className="settings-title">{activeTab?.label} Settings</h2>
-              <p className="settings-subtitle">Configure your {activeTab?.label.toLowerCase()} preferences</p>
+              <h2 className="settings-title">{activeTab.label}</h2>
+              <p className="settings-subtitle">{activeTab.subtitle}</p>
             </div>
           </div>
 
-          {tab === 'profile' && (
+          {tab === 'accounts' && (
             <div className="settings-body">
-              <div className="profile-hero">
-                <div className="profile-avatar-large">
-                  <span>PM</span>
-                  <button className="avatar-edit">Edit</button>
-                </div>
-                <div className="profile-hero-info">
-                  <input className="form-input big" defaultValue="Platform Admin" />
-                  <input className="form-input" defaultValue="admin@platform.manager" type="email" />
+              <div className="disclaimer-block">
+                <div className="disclaimer-icon"><FaInfoCircle /></div>
+                <div>
+                  <div className="disclaimer-title">Har platform ke liye ek dafa setup</div>
+                  <div className="disclaimer-body">
+                    1) "Setup" kholein aur us platform ki developer app banayein · 2) Redirect URI wahan register karein ·
+                    3) Client ID/Secret yahan save karein · 4) "Connect" dabayein aur apne account se login karein.
+                    Tokens sirf aapke server par rehte hain.
+                  </div>
                 </div>
               </div>
 
-              <div className="form-grid">
-                <div className="form-group">
-                  <label className="form-label">Full Name</label>
-                  <input className="form-input" defaultValue="Platform Admin" />
+              {platformState.error && (
+                <div className="adv-summary warn"><FaExclamationTriangle /> {platformState.error}</div>
+              )}
+
+              <div className="platform-list platform-list-advanced">
+                {platformState.providers.map(provider => (
+                  <ProviderCard
+                    key={provider.id}
+                    provider={provider}
+                    platforms={platforms}
+                    canConfigure={platformState.canConfigure}
+                    showToast={showToast}
+                    refreshPlatforms={refreshPlatforms}
+                  />
+                ))}
+                {platformState.loading && !platformState.providers.length && (
+                  <div className="settings-inline-hint"><FaSpinner className="spin" /> Platforms load ho rahe hain…</div>
+                )}
+              </div>
+
+              <div className="settings-section">
+                <h3 className="section-title-sm">WhatsApp</h3>
+                <p className="settings-inline-hint">
+                  WhatsApp Channels par post karne ki koi public API nahi hai, is liye WhatsApp auto-publish mein shamil nahi hai.
+                  Video publish hone ke baad post ka link WhatsApp par khud share kar sakte hain.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {tab === 'defaults' && (
+            <div className="settings-body">
+              <div className="settings-section">
+                <h3 className="section-title-sm"><FaHashtag /> Default tags</h3>
+                <input
+                  className="form-input"
+                  value={tagText}
+                  onChange={event => setTagText(event.target.value)}
+                  onBlur={event => saveTags(event.target.value)}
+                  onKeyDown={event => { if (event.key === 'Enter') saveTags(event.currentTarget.value) }}
+                  placeholder="#vlog #travel #pakistan"
+                />
+                <p className="settings-inline-hint">Yeh tags har naye upload mein pehle se lage honge (upload form mein hata bhi sakte hain).</p>
+              </div>
+
+              <div className="settings-section">
+                <h3 className="section-title-sm"><FaMapMarkerAlt /> Default location</h3>
+                <div className="form-grid">
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="default-location">Location name</label>
+                    <input id="default-location" className="form-input" value={postDefaults.locationName || ''} onChange={event => setPostDefaults(previous => ({ ...previous, locationName: event.target.value, placeId: '' }))} placeholder="Lahore, Pakistan" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="default-place">Facebook/Instagram Place ID (optional)</label>
+                    <input id="default-place" className="form-input" value={postDefaults.placeId || ''} onChange={event => setPostDefaults(previous => ({ ...previous, placeId: event.target.value.replace(/\D/g, '') }))} placeholder="e.g. 108105505876145" />
+                  </div>
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Username</label>
-                  <input className="form-input" defaultValue="@admin" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Email</label>
-                  <input className="form-input" defaultValue="admin@platform.manager" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label"><FaLanguage /> Language</label>
-                  <select className="form-input">
-                    <option>English (US)</option>
-                    <option>Roman Urdu</option>
-                    <option>Spanish</option>
-                    <option>Arabic</option>
-                  </select>
-                </div>
-                <div className="form-group full">
-                  <label className="form-label">Bio</label>
-                  <textarea className="form-input textarea" defaultValue="Managing platform operations & content uploads." rows={3} />
+                <p className="settings-inline-hint">
+                  Instagram aur Facebook par Place ID se asli location tag lagta hai. TikTok, YouTube, LinkedIn aur X ki API location tag nahi leti — wahan location caption mein "📍 name" ki tarah jati hai.
+                </p>
+              </div>
+
+              <div className="settings-section">
+                <h3 className="section-title-sm">Default platforms</h3>
+                <div className="default-targets">
+                  {PLATFORMS.map(platform => {
+                    const info = platforms[platform.id] || {}
+                    const { Icon } = platform
+                    return (
+                      <label key={platform.id} className={`default-target ${info.connected ? '' : 'disabled'}`} style={{ '--pcol': platform.color }}>
+                        <input type="checkbox" checked={info.connected && defaultTargets.includes(platform.id)} disabled={!info.connected} onChange={() => toggleDefaultTarget(platform.id)} />
+                        <Icon style={{ color: platform.color }} /> {platform.label}
+                        {!info.connected && <small>not connected</small>}
+                      </label>
+                    )
+                  })}
                 </div>
               </div>
+            </div>
+          )}
+
+          {tab === 'profile' && (
+            <div className="settings-body">
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="form-label" htmlFor="profile-name">Name</label>
+                  <input id="profile-name" className="form-input" value={profile.name} maxLength={40} onChange={event => setProfile(previous => ({ ...previous, name: event.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="profile-email">Email / subtitle</label>
+                  <input id="profile-email" className="form-input" value={profile.email} maxLength={60} onChange={event => setProfile(previous => ({ ...previous, email: event.target.value }))} placeholder="you@example.com" />
+                </div>
+              </div>
+              <p className="settings-inline-hint">Yeh sirf is browser mein save hota hai aur sidebar mein dikhta hai.</p>
             </div>
           )}
 
           {tab === 'notifications' && (
             <div className="settings-body">
               <div className="settings-section">
-                <h3 className="section-title-sm">Email Notifications</h3>
-                <Toggle id="emailNotif" label="Email notifications" sub="Receive updates via email" />
-                <Toggle id="marketing" label="Marketing emails" sub="Occasional product news and tips" />
-                <Toggle id="weeklyDigest" label="Weekly digest" sub="Summary of activity each week" />
-              </div>
-              <div className="settings-section">
-                <h3 className="section-title-sm">Push & In-App</h3>
-                <Toggle id="pushNotif" label="Push notifications" sub="Browser & desktop alerts" />
-                <Toggle id="sound" label="Sound effects" sub="Play sound on new events" />
-                <Toggle id="desktop" label="Desktop notifications" sub="Enable native desktop alerts" />
+                <h3 className="section-title-sm">Jab post publish ho jaye</h3>
+                <Toggle checked={!!prefs.desktopNotify} onChange={setDesktopNotify} label="Desktop notification" sub="Browser notification dikhayein (tab khula hona chahiye)" />
+                <Toggle checked={!!prefs.sound} onChange={value => setPrefs(previous => ({ ...previous, sound: value }))} label="Sound" sub="Chhoti si chime bajayein" />
+                <button type="button" className="btn btn-secondary" style={{ marginTop: 12 }} onClick={() => {
+                  if (prefs.desktopNotify && 'Notification' in window && Notification.permission === 'granted') new Notification('Platform Manager', { body: 'Test notification ✔' })
+                  else showToast('Desktop notification off hai.', 'info')
+                }}>
+                  <FaVolumeUp /> Test notification
+                </button>
               </div>
             </div>
           )}
@@ -342,394 +470,27 @@ function Settings({ themeId, setThemeId, themes, links, setLinks }) {
           {tab === 'appearance' && (
             <div className="settings-body">
               <div className="settings-section">
-                <h3 className="section-title-sm">Theme — Click to apply instantly</h3>
+                <h3 className="section-title-sm">Theme</h3>
                 <div className="theme-grid">
-                  {themeList.map(t => {
-                    const isActive = themeId === t.id
+                  {Object.entries(themes).map(([id, theme]) => {
+                    const isActive = themeId === id
                     return (
-                      <button
-                        key={t.id}
-                        className={`theme-card ${isActive ? 'active' : ''}`}
-                        onClick={() => setThemeId(t.id)}
-                        type="button"
-                      >
-                        <div className="theme-preview" style={{ background: `linear-gradient(135deg, ${t.a}, ${t.b})` }}>
+                      <button key={id} className={`theme-card ${isActive ? 'active' : ''}`} onClick={() => setThemeId(id)} type="button" aria-pressed={isActive}>
+                        <div className="theme-preview" style={{ background: `linear-gradient(135deg, ${theme.a1}, ${theme.a2})` }}>
                           {isActive && <span className="theme-check"><FaCheck /></span>}
                         </div>
-                        <span className="theme-name">
-                          {t.name} {isActive && <span style={{ opacity: 0.8 }}>• Active</span>}
-                        </span>
+                        <span className="theme-name">{theme.name} {isActive && <span style={{ opacity: 0.8 }}>• Active</span>}</span>
                       </button>
                     )
                   })}
                 </div>
-                <div className="theme-hint">
-                  💡 Sab themes real-time apply hoti hain — <b>Save Changes</b> dabane ki zaroorat nahi.
-                </div>
               </div>
-
               <div className="settings-section">
                 <h3 className="section-title-sm">Interface</h3>
-                <Toggle id="autoUpdate" label="Smooth animations" sub="Enabled rich transition effects" />
-                <Toggle id="beta" label="Compact mode" sub="Reduce spacing in lists" />
-                <Toggle id="telemetry" label="Reduced motion" sub="Minimize animations globally" />
+                <Toggle checked={!!prefs.reducedMotion} onChange={value => setPrefs(previous => ({ ...previous, reducedMotion: value }))} label="Reduced motion" sub="Animations band kar dein" />
               </div>
             </div>
           )}
-
-          {tab === 'links' && (
-            <div className="settings-body">
-              <div className="disclaimer-block" style={{ animation: 'fadeIn 0.35s ease both' }}>
-                <div className="disclaimer-icon"><FaInfoCircle /></div>
-                <div>
-                  <div className="disclaimer-title">Frontend-Only Prototype (Important)</div>
-                  <div className="disclaimer-body">
-                    Yeh app abhi frontend-only prototype hai. <b>Actual social API (TikTok/Instagram wagera) ke liye
-                    aapko ek backend server chahiye hoga</b> — kyun ke browsers ke security rules (CORS) aur
-                    OAuth redirect flows ke liye server zaroori hota hai. Yahan ke <code>Access Tokens</code> aur
-                    <code> Client Keys</code> sirf skeleton/demo hain. Jab aapka backend ready hoga toh in fields mein
-                    asli keys daalein. Jab tak demo mode mein "Connect" karein — app internal simulate karke upload progress
-                    ko real-time dikhayega, aur done hone par us platform ke post URL pattern ka link banayega taake aap
-                    verify kar saken.
-                  </div>
-                </div>
-              </div>
-
-              <div className="settings-section">
-                <h3 className="section-title-sm">
-                  Connected Platforms <span className="badge badge-cyan" style={{ marginLeft: 8 }}>
-                    {Object.values(linksDraft).filter(l => l.connected).length} / {PLATFORMS.length} linked
-                  </span>
-                </h3>
-                <p className="settings-inline-hint">
-                  Neeche har platform ka Client Key + Access Token daalein (Developer Dashboard se), profile URL enter karein,
-                  phir <b>Connect</b> dabayein. Jab sab links <span className="badge badge-green" style={{ padding: '2px 6px', fontSize: 10 }}>Connected</span> ho jayen,
-                  Upload par jaake file upload karein — wo automatic in par publish ho jayega, aur "Done" hone par seedha
-                  us post ka link Recent Transfers mein nazar aayega.
-                </p>
-
-                <div className="platform-list platform-list-advanced">
-                  {PLATFORMS.map((p, i) => {
-                    const draft = linksDraft[p.id] || { url: '', connected: false, authStatus: 'disconnected', accessToken: '', clientKey: '', userHandle: '' }
-                    const { Icon } = p
-                    const isConnecting = !!connecting[p.id]
-                    const isExpanded = !!expanded[p.id] || !draft.connected
-                    const showToken = !!tokenVisible[p.id]
-                    const expDays = draft.expiresAt ? Math.max(0, Math.ceil((draft.expiresAt - Date.now()) / (1000 * 60 * 60 * 24))) : 0
-
-                    return (
-                      <div
-                        key={p.id}
-                        className={`platform-card advanced ${draft.connected ? 'connected' : ''} ${isExpanded ? 'expanded' : ''}`}
-                        style={{ animation: `fadeIn 0.45s ease both`, animationDelay: `${0.1 + i * 0.06}s` }}
-                      >
-                        <div className="platform-card-top">
-                          <div
-                            className="platform-icon"
-                            style={{
-                              background: `linear-gradient(135deg, ${p.color}, ${p.accent})`,
-                              boxShadow: `0 8px 24px ${p.accent}55`,
-                            }}
-                          >
-                            <Icon />
-                          </div>
-
-                          <div className="platform-info">
-                            <div className="platform-head">
-                              <h4 className="platform-name">{p.label}</h4>
-                              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                {isConnecting && <span className="badge badge-amber"><FaSpinner className="spin" /> Connecting…</span>}
-                                {!isConnecting && draft.connected
-                                  ? <span className="badge badge-green"><FaCheck /> Connected {draft.userHandle ? `· @${draft.userHandle}` : ''}</span>
-                                  : <span className="badge badge-slate">{draft.authStatus === 'disconnected' ? 'Needs setup' : 'Pending verification'}</span>}
-                              </div>
-                            </div>
-                            <div className="platform-hint">{p.hint}</div>
-                            <div className="platform-oauth-hint">
-                              <FaUnlock /> <span style={{ color: '#94a3b8' }}>{p.oauthHint}</span>
-                              {' · '}
-                              <a href={p.docsLink} target="_blank" rel="noreferrer" className="link-hover" style={{ fontSize: 12 }}>
-                                API Docs <FaExternalLinkAlt style={{ display: 'inline' }} />
-                              </a>
-                            </div>
-                          </div>
-
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <button
-                              type="button"
-                              className="btn btn-ghost"
-                              onClick={() => setExpanded(prev => ({ ...prev, [p.id]: !isExpanded }))}
-                              title="Toggle details"
-                            >
-                              {isExpanded ? 'Collapse' : 'Details'}
-                            </button>
-                            {draft.connected ? (
-                              <button
-                                type="button"
-                                className="btn btn-secondary"
-                                disabled={isConnecting}
-                                onClick={() => disconnectPlatform(p.id, p)}
-                              >
-                                {isConnecting ? <FaSpinner className="spin" /> : <FaPlug />}
-                                Disconnect
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn btn-primary"
-                                disabled={isConnecting}
-                                onClick={() => startOAuthFlow(p.id, p)}
-                              >
-                                {isConnecting ? <FaSpinner className="spin" /> : <FaUnlock />}
-                                Connect
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {isExpanded && (
-                          <div className="platform-card-expand" style={{ animation: 'fadeIn 0.3s ease both' }}>
-                            <div className="adv-grid">
-                              <div className="adv-field">
-                                <div className="adv-label">
-                                  <FaLink /> Profile / Channel URL <span className="req">*</span>
-                                </div>
-                                <div className="adv-input-wrap">
-                                  <input
-                                    className="form-input"
-                                    placeholder={p.placeholder}
-                                    value={draft.url}
-                                    onChange={(e) => updateLinkField(p.id, 'url', e.target.value)}
-                                    onBlur={(e) => {
-                                      const v = e.target.value
-                                      if (!draft.userHandle && v) {
-                                        const h = extractHandle(p.id, v)
-                                        if (h) updateLinkField(p.id, 'userHandle', h)
-                                      }
-                                    }}
-                                  />
-                                  {draft.url && (
-                                    <a
-                                      href={draft.url.startsWith('http') ? draft.url : `https://${draft.url}`}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="adv-suffix-btn"
-                                    >
-                                      <FaExternalLinkAlt />
-                                    </a>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="adv-field">
-                                <div className="adv-label">
-                                  <FaUser /> Username / Handle
-                                </div>
-                                <div className="adv-input-wrap">
-                                  <input
-                                    className="form-input"
-                                    placeholder="@yourhandle"
-                                    value={draft.userHandle}
-                                    onChange={(e) => updateLinkField(p.id, 'userHandle', e.target.value.replace(/^@/, ''))}
-                                  />
-                                </div>
-                              </div>
-
-                              <div className="adv-field">
-                                <div className="adv-label">
-                                  <FaKey /> Client Key / App ID <span className="req">*</span>
-                                  <span className="adv-sub">
-                                    {p.label} Developer Dashboard se milta hai
-                                  </span>
-                                </div>
-                                <input
-                                  className="form-input"
-                                  placeholder="Client Key (e.g. awbo0d…)"
-                                  value={draft.clientKey}
-                                  onChange={(e) => updateLinkField(p.id, 'clientKey', e.target.value)}
-                                />
-                              </div>
-
-                              <div className="adv-field">
-                                <div className="adv-label">
-                                  <FaKey /> Access Token <span className="req">*</span>
-                                  <span className="adv-sub">
-                                    {draft.connected && draft.expiresAt
-                                      ? `Expires in ${expDays} days · `
-                                      : ''}
-                                    Required scopes: <code>{p.scopes}</code>
-                                  </span>
-                                </div>
-                                <div className="adv-input-wrap">
-                                  <input
-                                    className="form-input"
-                                    type={showToken ? 'text' : 'password'}
-                                    placeholder="OAuth access_token..."
-                                    value={draft.accessToken}
-                                    onChange={(e) => updateLinkField(p.id, 'accessToken', e.target.value)}
-                                  />
-                                  <button
-                                    type="button"
-                                    className="adv-suffix-btn"
-                                    onClick={() => toggleTokenVisibility(p.id)}
-                                    title={showToken ? 'Hide token' : 'Show token'}
-                                  >
-                                    {showToken ? <FaEyeSlash /> : <FaEye />}
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="adv-field full">
-                                <div className="adv-label">
-                                  <FaSync /> Upload Endpoint
-                                </div>
-                                <input
-                                  className="form-input mono"
-                                  value={p.uploadEndpoint}
-                                  readOnly
-                                  style={{ color: '#94a3b8' }}
-                                />
-                                <div className="endpoint-note">
-                                  <FaInfoCircle /> Actual API call yahan se <code>POST {p.uploadEndpoint}</code> jayega (jab backend ready ho).
-                                  Prototype mode mein browser is CORS ki wajah se direct nahi bhej sakta.
-                                </div>
-                              </div>
-                            </div>
-
-                            {draft.connected && (
-                              <div className="adv-summary">
-                                <div className="summary-pill green">
-                                  <FaCheck /> Auth OK
-                                </div>
-                                <div className="summary-pill cyan">
-                                  <FaKey /> Token: {draft.accessToken ? (draft.accessToken.slice(0, 8) + '•••' + draft.accessToken.slice(-4)) : 'N/A'}
-                                </div>
-                                <div className="summary-pill slate">
-                                  <FaClock /> Expires: {draft.expiresAt ? `${expDays}d` : 'N/A'}
-                                </div>
-                                <div className="summary-pill amber">
-                                  <FaExclamationTriangle /> Scopes: <code style={{ color: 'inherit' }}>{p.scopes}</code>
-                                </div>
-                              </div>
-                            )}
-
-                            {!draft.connected && (
-                              <div className="adv-summary warn">
-                                <FaExclamationCircle /> Setup zaroorat: Profile URL + Client Key + Access Token —
-                                sab 3 fields enter karein phir <b>Connect</b> dabayein.
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-
-              <div className="settings-section">
-                <h3 className="section-title-sm">Auto-Publish Behavior</h3>
-                <Toggle id="autoUpdate" label="Auto-publish on upload" sub="Jaise hi file upload ho sab linked platforms par bhej de" />
-                <Toggle id="marketing" label="Ask confirmation each time" sub="Har upload se pehle confirm prompt dikhayein" />
-                <Toggle id="beta" label="Add hashtags & caption template" sub="Har post ke saath default caption & tags include karein" />
-              </div>
-            </div>
-          )}
-
-          {tab === 'security' && (
-            <div className="settings-body">
-              <div className="settings-section">
-                <h3 className="section-title-sm">Password</h3>
-                <div className="form-grid">
-                  <div className="form-group full">
-                    <label className="form-label">Current password</label>
-                    <input className="form-input" type="password" placeholder="••••••••" />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">New password</label>
-                    <input className="form-input" type="password" placeholder="••••••••" />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Confirm new</label>
-                    <input className="form-input" type="password" placeholder="••••••••" />
-                  </div>
-                </div>
-              </div>
-              <div className="settings-section">
-                <h3 className="section-title-sm">Authentication</h3>
-                <Toggle id="twoFactor" label="Two-factor authentication" sub="Add an extra layer of login security" />
-                <div className="toggle-row">
-                  <div className="toggle-info">
-                    <div className="toggle-label"><FaKey /> API Keys</div>
-                    <div className="toggle-sub">Manage access tokens for integrations</div>
-                  </div>
-                  <button className="btn btn-secondary">Manage</button>
-                </div>
-                <div className="toggle-row">
-                  <div className="toggle-info">
-                    <div className="toggle-label">Active sessions</div>
-                    <div className="toggle-sub">2 devices · Last seen just now</div>
-                  </div>
-                  <button className="btn btn-ghost" style={{ color: '#f87171' }}>Sign out all</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {tab === 'storage' && (
-            <div className="settings-body">
-              <div className="storage-overview">
-                <div className="storage-ring">
-                  <svg viewBox="0 0 120 120">
-                    <circle cx="60" cy="60" r="52" stroke="rgba(148,163,184,0.15)" strokeWidth="10" fill="none" />
-                    <circle
-                      cx="60" cy="60" r="52"
-                      stroke="url(#grad-storage)" strokeWidth="10" fill="none"
-                      strokeLinecap="round"
-                      strokeDasharray={`${(68 / 100) * 326} 326`}
-                      transform="rotate(-90 60 60)"
-                      style={{ animation: 'strokeGrow 1.4s cubic-bezier(0.4,0,0.2,1) both' }}
-                    />
-                    <defs>
-                      <linearGradient id="grad-storage" x1="0" y1="0" x2="1" y2="1">
-                        <stop offset="0%" stopColor="var(--accent-1)" />
-                        <stop offset="100%" stopColor="var(--accent-2)" />
-                      </linearGradient>
-                    </defs>
-                  </svg>
-                  <div className="storage-ring-text">
-                    <div className="storage-pct">68%</div>
-                    <div className="storage-label">used</div>
-                  </div>
-                </div>
-                <div className="storage-info">
-                  <div className="storage-row">
-                    <span>Images</span><b>34.2 GB</b>
-                  </div>
-                  <div className="storage-row">
-                    <span>Videos</span><b>22.8 GB</b>
-                  </div>
-                  <div className="storage-row">
-                    <span>Documents</span><b>8.6 GB</b>
-                  </div>
-                  <div className="storage-row total">
-                    <span>Total</span><b>65.6 / 100 GB</b>
-                  </div>
-                  <button className="btn btn-primary" style={{ marginTop: 16, width: '100%' }}>Upgrade Plan</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="settings-foot">
-            <button className="btn btn-secondary" onClick={() => {
-              setLinksDraft(links)
-              showToast('Changes discarded', 'info')
-            }}>Discard</button>
-            <button className="btn btn-primary" onClick={saveAll}>
-              <FaSave /> Save Changes
-            </button>
-          </div>
         </div>
       </div>
     </div>
