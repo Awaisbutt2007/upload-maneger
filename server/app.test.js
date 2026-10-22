@@ -72,7 +72,11 @@ const youtubeApi = calls => async (url, options = {}) => {
   if (url.startsWith('https://www.googleapis.com/upload/youtube/v3/videos')) {
     return new Response(null, { status: 200, headers: { location: 'https://upload.youtube.test/session-1' } })
   }
-  if (url === 'https://upload.youtube.test/session-1') return Response.json({ id: 'yt-video-1' })
+  if (url === 'https://upload.youtube.test/session-1') {
+    // First chunk is only partly stored, like a real resumable upload can be.
+    if (new Set(calls.filter(call => call.url === url).map(call => call.options)).size === 1) return new Response(null, { status: 308, headers: { range: 'bytes=0-3' } })
+    return Response.json({ id: 'yt-video-1' })
+  }
   return null
 }
 
@@ -250,8 +254,11 @@ test('one upload publishes to every selected platform with the same caption, tag
     assert.deepEqual(youtubeMeta.snippet.tags, ['food', 'lahore'])
     assert.match(youtubeMeta.snippet.description, /#food #lahore\n\n📍 Lahore, Pakistan$/)
     assert.equal(youtubeMeta.status.privacyStatus, 'unlisted')
-    const youtubeChunk = calls.find(call => call.url === 'https://upload.youtube.test/session-1')
-    assert.equal(youtubeChunk.options.headers['Content-Range'], `bytes 0-${video.length - 1}/${video.length}`)
+    const youtubeChunks = new Set(calls.filter(call => call.url === 'https://upload.youtube.test/session-1').map(call => call.options))
+    assert.deepEqual([...youtubeChunks].map(options => options.headers['Content-Range']), [
+      `bytes 0-${video.length - 1}/${video.length}`,
+      `bytes 4-${video.length - 1}/${video.length}`,
+    ])
 
     const reused = await fetch(`${baseUrl}/api/publish`, {
       method: 'POST',

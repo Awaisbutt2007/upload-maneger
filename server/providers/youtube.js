@@ -109,7 +109,8 @@ export const youtube = {
     }
 
     let video = null
-    for (let start = 0; start < media.size; start += CHUNK) {
+    let start = 0
+    while (start < media.size) {
       const end = Math.min(start + CHUNK, media.size)
       const response = await ctx.fetch(uploadUrl, {
         method: 'PUT',
@@ -120,10 +121,16 @@ export const youtube = {
         },
         body: await media.readRange(start, end),
       })
-      if (response.status === 308) continue
+      // 308 = chunk accepted; Range says how many bytes Google actually stored, which can be fewer than sent.
+      if (response.status === 308) {
+        const stored = response.headers.get('range')?.match(/bytes=0-(\d+)/)
+        start = stored ? Number(stored[1]) + 1 : 0
+        continue
+      }
       const payload = await readJson(response)
       if (!response.ok) throw apiError(502, 'YOUTUBE_UPLOAD_FAILED', `YouTube: ${platformErrorMessage(payload, `HTTP ${response.status}`)}`)
       video = payload
+      break
     }
     if (!video?.id) throw apiError(502, 'YOUTUBE_UPLOAD_FAILED', 'YouTube ne video id return nahi ki.')
     return {

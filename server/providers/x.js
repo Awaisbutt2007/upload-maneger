@@ -127,6 +127,8 @@ export const x = {
       }, { code: 'X_API_ERROR', label: 'X' })
       processing = payload.data?.processing_info
     }
+    if (processing?.state === 'failed') throw apiError(502, 'X_PROCESSING_FAILED', `X video process nahi kar saka: ${processing.error?.message || 'unknown'}`)
+    if (processing && processing.state !== 'succeeded') throw apiError(504, 'X_PROCESSING_TIMEOUT', 'X processing mein zyada waqt lag gaya. Dobara try karein.')
 
     const { payload: tweet } = await requestJson(ctx.fetch, `${API}/tweets`, {
       method: 'POST',

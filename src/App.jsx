@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import Sidebar from './components/Sidebar'
 import Upload from './pages/Upload'
 import Inbox from './pages/Inbox'
-import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import { api } from './api'
 import { PLATFORM_BY_ID } from './platforms'
 import './App.css'
+
+// Recharts is large; load it only when Analytics is opened.
+const Analytics = lazy(() => import('./pages/Analytics'))
 
 const THEMES = {
   aqua:     { a1: '#06b6d4', a2: '#14b8a6', a3: '#0ea5e9', name: 'Aqua' },
@@ -165,7 +167,7 @@ function App() {
       case 'inbox':
         return <Inbox {...shared} transfers={transfers} />
       case 'analytics':
-        return <Analytics transfers={transfers} />
+        return <Suspense fallback={null}><Analytics transfers={transfers} /></Suspense>
       case 'settings':
         return (
           <Settings

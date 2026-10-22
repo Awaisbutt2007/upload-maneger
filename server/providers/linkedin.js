@@ -109,14 +109,17 @@ export const linkedin = {
 
     onStage('processing')
     const deadline = Date.now() + ctx.pollTimeoutMs
+    let status = ''
     while (Date.now() < deadline) {
       await sleep(ctx.pollIntervalMs)
       const { payload } = await requestJson(ctx.fetch, `https://api.linkedin.com/rest/videos/${encodeURIComponent(video)}`, {
         headers: restHeaders(ctx, account),
       }, { code: 'LINKEDIN_API_ERROR', label: 'LinkedIn' })
-      if (payload.status === 'AVAILABLE') break
-      if (payload.status === 'PROCESSING_FAILED') throw apiError(502, 'LINKEDIN_PROCESSING_FAILED', 'LinkedIn video process nahi kar saka.')
+      status = payload.status
+      if (status === 'AVAILABLE') break
+      if (status === 'PROCESSING_FAILED') throw apiError(502, 'LINKEDIN_PROCESSING_FAILED', 'LinkedIn video process nahi kar saka.')
     }
+    if (status !== 'AVAILABLE') throw apiError(504, 'LINKEDIN_PROCESSING_TIMEOUT', 'LinkedIn processing mein zyada waqt lag gaya. Dobara try karein.')
 
     const { response } = await requestJson(ctx.fetch, 'https://api.linkedin.com/rest/posts', {
       method: 'POST',
