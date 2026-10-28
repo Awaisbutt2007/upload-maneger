@@ -91,7 +91,7 @@ const combine = (...handlers) => async (url, options) => {
 test('health and OAuth expose missing setup instead of faking a connection', async () => {
   const { server, baseUrl } = await startServer(createApp({ config: {} }))
   try {
-    assert.deepEqual(await fetch(`${baseUrl}/api/health`).then(response => response.json()), { ok: true, tiktokConfigured: false })
+    assert.deepEqual(await fetch(`${baseUrl}/api/health`).then(response => response.json()), { ok: true, tiktokConfigured: false, uploadMode: 'direct' })
 
     for (const provider of ['tiktok', 'meta', 'youtube', 'linkedin', 'x']) {
       const response = await fetch(`${baseUrl}/api/${provider}/oauth/start`, { method: 'POST' })

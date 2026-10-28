@@ -29,8 +29,33 @@ export async function api(path, { method = 'GET', body } = {}) {
   return payload
 }
 
+let uploadModeRequest = null
+const uploadMode = () => (uploadModeRequest ||= api('/api/health').then(health => health.uploadMode || 'direct').catch(() => 'direct'))
+
+export async function uploadVideo(file, onProgress) {
+  return (await uploadMode()) === 'blob' ? uploadToBlob(file, onProgress) : uploadDirect(file, onProgress)
+}
+
+// On Vercel the request body limit is 4.5 MB, so the browser sends the video straight to Blob storage.
+async function uploadToBlob(file, onProgress) {
+  const { upload } = await import('@vercel/blob/client')
+  let blob
+  try {
+    blob = await upload(`videos/${file.name}`, file, {
+      access: 'public',
+      handleUploadUrl: '/api/uploads/blob',
+      contentType: file.type,
+      multipart: file.size > 50 * 1024 * 1024,
+      onUploadProgress: ({ percentage }) => onProgress(Math.round(percentage)),
+    })
+  } catch (error) {
+    throw new Error(`Upload fail ho gaya: ${error.message}`)
+  }
+  return api('/api/uploads/register', { method: 'POST', body: { url: blob.url, name: file.name } })
+}
+
 // XHR instead of fetch so the browser can report upload progress.
-export function uploadVideo(file, onProgress) {
+function uploadDirect(file, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', '/api/uploads')

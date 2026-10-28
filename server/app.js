@@ -63,12 +63,36 @@ function fileMedia(upload) {
   }
 }
 
+// A video the browser uploaded straight to Vercel Blob (serverless request bodies are capped at 4.5 MB).
+function blobMedia(upload, fetchImpl) {
+  const read = async headers => {
+    const response = await fetchImpl(upload.url, { headers })
+    if (!response.ok) throw apiError(502, 'VIDEO_READ_FAILED', `Uploaded video read nahi ho saki (${response.status}).`)
+    return Buffer.from(await response.arrayBuffer())
+  }
+  return {
+    size: upload.size,
+    contentType: upload.contentType,
+    name: upload.name,
+    readAll: () => read({}),
+    readRange: (start, end) => read({ Range: `bytes=${start}-${end - 1}` }),
+  }
+}
+
+async function discardUpload(upload) {
+  if (upload.url) {
+    const { del } = await import('@vercel/blob')
+    await del(upload.url)
+  } else {
+    await rm(upload.path, { force: true })
+  }
+}
+
 export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve(process.cwd(), '.env.local') } = {}) {
   const app = express()
-  const store = createSessionStore(config.dataDir)
+  const store = createSessionStore(config.dataDir, config.databaseUrl)
   const uploadDir = config.dataDir ? join(config.dataDir, 'uploads') : join(tmpdir(), 'platform-manager-uploads')
   const maxUploadBytes = config.maxUploadBytes || 512 * 1024 * 1024
-  const oauthStates = new Map()
   const providerConfigs = config.providers || {}
   // Older setups configure TikTok with flat clientKey/clientSecret/redirectUri fields.
   if (config.clientKey || config.clientSecret || config.redirectUri) {
@@ -79,29 +103,32 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
   // Refreshes every linked account's tokens in the background, so a connection stays alive
   // even if the app isn't opened for months. Accounts are only removed by /disconnect.
   const keepAlive = async () => {
-    for (const session of store.all()) {
+    const result = { accounts: 0, reconnectRequired: 0 }
+    for (const session of await store.loadAll()) {
       for (const provider of Object.values(PROVIDERS)) {
         const account = session.accounts?.[provider.id]
         if (!account || !isConfigured(provider.id)) continue
+        result.accounts++
         try {
           await provider.ensureToken(contextFor(provider.id), account)
           delete account.reconnectRequired
         } catch (error) {
-          if (error.status === 401) account.reconnectRequired = { code: error.code, message: error.message }
+          if (error.status === 401) {
+            account.reconnectRequired = { code: error.code, message: error.message }
+            result.reconnectRequired++
+          }
         }
       }
     }
-    store.persist()
+    await store.flush()
+    return result
   }
-  const keepAliveTimer = setInterval(() => { keepAlive().catch(() => {}) }, KEEP_ALIVE_MS)
-  keepAliveTimer.unref()
-  if (config.keepAliveOnStart) keepAlive().catch(() => {})
-
-  const sweep = setInterval(() => {
-    const now = Date.now()
-    for (const [key, value] of oauthStates) if (now > value.expiresAt) oauthStates.delete(key)
-  }, 5 * 60_000)
-  sweep.unref()
+  // Serverless instances have no lasting timers; there Vercel Cron calls /api/cron/keep-alive instead.
+  if (!config.serverless) {
+    const keepAliveTimer = setInterval(() => { keepAlive().catch(() => {}) }, KEEP_ALIVE_MS)
+    keepAliveTimer.unref()
+    if (config.keepAliveOnStart) keepAlive().catch(() => {})
+  }
 
   const isConfigured = id => Boolean(providerConfigs[id].clientId && providerConfigs[id].clientSecret)
   const canConfigure = req => Boolean(config.allowConfigWrite && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress))
@@ -171,16 +198,34 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
   }
 
   app.disable('x-powered-by')
+  if (config.trustProxy) app.set('trust proxy', true)
   app.use(express.json({ limit: '64kb' }))
-  // Slides the session cookie's expiry forward (at most once a day) so linked accounts survive indefinitely.
-  app.use((req, res, next) => {
-    if (readCookie(req, SESSION_COOKIE)) getSession(req)
-    if (req.renewSession) setSessionCookie(res, req.renewSession, Boolean(config.secureCookies))
-    next()
+  // Loads the caller's session before the route runs and saves its changes before the response goes out.
+  // Also slides the session cookie's expiry forward (at most once a day) so linked accounts survive indefinitely.
+  app.use('/api', async (req, res, next) => {
+    try {
+      const id = readCookie(req, SESSION_COOKIE)
+      if (id) await store.load(id)
+      const end = res.end
+      res.end = function (...args) {
+        store.flush().finally(() => end.apply(res, args))
+        return res
+      }
+      if (id) getSession(req)
+      if (req.renewSession) setSessionCookie(res, req.renewSession, Boolean(config.secureCookies))
+      next()
+    } catch (error) { next(error) }
   })
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, tiktokConfigured: isConfigured('tiktok') })
+    res.json({ ok: true, tiktokConfigured: isConfigured('tiktok'), uploadMode: config.blobUploads ? 'blob' : 'direct' })
+  })
+
+  app.get('/api/cron/keep-alive', async (req, res, next) => {
+    try {
+      if (!config.cronSecret || req.get('authorization') !== `Bearer ${config.cronSecret}`) throw apiError(401, 'UNAUTHORIZED', 'Not allowed.')
+      res.json(await keepAlive())
+    } catch (error) { next(error) }
   })
 
   app.get('/api/platforms', async (req, res, next) => {
@@ -189,6 +234,7 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
       const platforms = await describeAll(current?.session)
       res.json({
         canConfigure: canConfigure(req),
+        uploadMode: config.blobUploads ? 'blob' : 'direct',
         providers: Object.values(PROVIDERS).map(provider => ({
           id: provider.id,
           label: provider.label,
@@ -243,13 +289,10 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
       const state = randomBytes(24).toString('hex')
       const redirectUri = redirectUriFor(provider.id, req)
       const pkce = provider.usesPkce ? (provider.pkcePair?.() || pkcePair()) : null
-      oauthStates.set(state, {
-        provider: provider.id,
-        sessionId: current.id,
-        redirectUri,
-        codeVerifier: pkce?.verifier,
-        expiresAt: Date.now() + 10 * 60_000,
-      })
+      // Kept in the session itself so the callback works on whichever server instance receives it.
+      const now = Date.now()
+      current.session.oauthStates = Object.fromEntries(Object.entries(current.session.oauthStates || {}).filter(([, value]) => value.expiresAt > now))
+      current.session.oauthStates[state] = { provider: provider.id, redirectUri, codeVerifier: pkce?.verifier, expiresAt: now + 10 * 60_000 }
       setSessionCookie(res, current.id, Boolean(config.secureCookies))
       const authorizationUrl = provider.authorizationUrl({
         config: { ...providerConfigs[provider.id], redirectUri },
@@ -265,10 +308,10 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
     const fail = message => res.redirect(`/?oauth=error&provider=${encodeURIComponent(req.params.provider)}&message=${encodeURIComponent(message)}`)
     if (!provider) return fail('Unknown platform.')
     const state = typeof req.query.state === 'string' ? req.query.state : ''
-    const pending = oauthStates.get(state)
-    oauthStates.delete(state)
     const current = getSession(req)
-    if (!pending || pending.provider !== provider.id || pending.expiresAt < Date.now() || !current || current.id !== pending.sessionId) {
+    const pending = current?.session.oauthStates?.[state]
+    if (pending) delete current.session.oauthStates[state]
+    if (!pending || pending.provider !== provider.id || pending.expiresAt < Date.now()) {
       return fail('OAuth state invalid ya expire ho gaya. Dobara connect karein.')
     }
     if (req.query.error) {
@@ -327,6 +370,50 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
     const post = normalizePost(req.body)
     const platforms = (Array.isArray(req.body?.platforms) ? req.body.platforms : PLATFORMS).filter(id => PLATFORMS.includes(id))
     res.json({ tags: post.tags, previews: Object.fromEntries(platforms.map(id => [id, captionFor(id, post)])) })
+  })
+
+  // Step 1 on Vercel: the browser uploads the video straight to Blob storage with a token from here...
+  app.post('/api/uploads/blob', async (req, res, next) => {
+    try {
+      requireSession(req)
+      if (!config.blobUploads) throw apiError(404, 'BLOB_UPLOADS_DISABLED', 'Blob uploads is server par enabled nahi hain.')
+      const { handleUpload } = await import('@vercel/blob/client')
+      res.json(await handleUpload({
+        request: req,
+        body: req.body,
+        onBeforeGenerateToken: async () => ({ allowedContentTypes: VIDEO_TYPES, maximumSizeInBytes: maxUploadBytes, addRandomSuffix: true }),
+      }))
+    } catch (error) {
+      next(error.status ? error : apiError(400, 'BLOB_UPLOAD_REJECTED', error.message))
+    }
+  })
+
+  // ...then registers the finished blob; head() only finds blobs in this app's own store.
+  app.post('/api/uploads/register', async (req, res, next) => {
+    try {
+      const current = requireSession(req)
+      if (!config.blobUploads) throw apiError(404, 'BLOB_UPLOADS_DISABLED', 'Blob uploads is server par enabled nahi hain.')
+      let url = null
+      try { url = new URL(String(req.body?.url || '')) } catch {}
+      if (!url || url.protocol !== 'https:' || !url.hostname.endsWith('.blob.vercel-storage.com')) throw apiError(400, 'INVALID_UPLOAD_URL', 'Upload URL sahi nahi hai.')
+      const { head } = await import('@vercel/blob')
+      const blob = await head(url.toString()).catch(() => null)
+      if (!blob) throw apiError(404, 'UPLOAD_NOT_FOUND', 'Uploaded video nahi mili — dobara select karein.')
+      const contentType = blob.contentType.split(';')[0].trim()
+      if (!VIDEO_TYPES.includes(contentType)) throw apiError(415, 'UNSUPPORTED_VIDEO_TYPE', 'MP4, MOV ya WebM video select karein.')
+      if (blob.size > maxUploadBytes) throw apiError(413, 'VIDEO_TOO_LARGE', `Video ${Math.round(maxUploadBytes / 1024 / 1024)} MB se chhoti honi chahiye.`)
+
+      const id = randomUUID()
+      const name = String(req.body?.name || 'video').slice(0, 200)
+      current.session.uploads[id] = { id, url: blob.url, size: blob.size, contentType, name, createdAt: Date.now() }
+      for (const [oldId, upload] of Object.entries(current.session.uploads)) {
+        if (Date.now() - upload.createdAt > UPLOAD_TTL_MS && !upload.inUse) {
+          delete current.session.uploads[oldId]
+          discardUpload(upload).catch(() => {})
+        }
+      }
+      res.status(201).json({ uploadId: id, size: blob.size, contentType })
+    } catch (error) { next(error) }
   })
 
   // Step 1: the browser streams the video once; it is kept on disk until every platform is done.
@@ -408,39 +495,45 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
       }
       session.jobs[job.id] = job
       upload.inUse = true
-      store.persist()
+      store.pin(current.id)
       res.status(202).json({ job })
 
-      const media = fileMedia(upload)
-      await Promise.all(requested.map(async platform => {
-        const entry = job.platforms[platform]
-        const provider = providerForPlatform(platform)
-        try {
-          const account = session.accounts[provider.id]
-          if (!account) throw apiError(401, 'NOT_CONNECTED', 'Account disconnect ho gaya.')
-          const result = await provider.publish(contextFor(provider.id), account, platform, {
-            post,
-            media,
-            options: options[platform] || {},
-            onStage: stage => { entry.status = stage; store.persist() },
-          })
-          Object.assign(entry, { status: 'done', url: result.url || null, postId: result.postId || null, warning: result.warning || '' })
-        } catch (error) {
-          Object.assign(entry, { status: 'failed', error: error.message || 'Publish fail ho gaya.' })
-        }
-        store.persist()
-      }))
+      const media = upload.url ? blobMedia(upload, fetchImpl) : fileMedia(upload)
+      // On Vercel, waitUntil keeps the function alive until every platform is done.
+      const work = (async () => {
+        await Promise.all(requested.map(async platform => {
+          const entry = job.platforms[platform]
+          const provider = providerForPlatform(platform)
+          try {
+            const account = session.accounts[provider.id]
+            if (!account) throw apiError(401, 'NOT_CONNECTED', 'Account disconnect ho gaya.')
+            const result = await provider.publish(contextFor(provider.id), account, platform, {
+              post,
+              media,
+              options: options[platform] || {},
+              onStage: stage => { entry.status = stage; store.persist() },
+            })
+            Object.assign(entry, { status: 'done', url: result.url || null, postId: result.postId || null, warning: result.warning || '' })
+          } catch (error) {
+            Object.assign(entry, { status: 'failed', error: error.message || 'Publish fail ho gaya.' })
+          }
+          store.persist()
+        }))
 
-      const results = Object.values(job.platforms)
-      job.status = results.every(entry => entry.status === 'done') ? 'done' : results.some(entry => entry.status === 'done') ? 'partial' : 'failed'
-      job.finishedAt = Date.now()
-      delete session.uploads[upload.id]
-      await rm(upload.path, { force: true }).catch(() => {})
-      const jobIds = Object.keys(session.jobs)
-      for (const id of jobIds.slice(0, Math.max(0, jobIds.length - 100))) delete session.jobs[id]
-      store.persist()
+        const results = Object.values(job.platforms)
+        job.status = results.every(entry => entry.status === 'done') ? 'done' : results.some(entry => entry.status === 'done') ? 'partial' : 'failed'
+        job.finishedAt = Date.now()
+        delete session.uploads[upload.id]
+        await discardUpload(upload).catch(() => {})
+        const jobIds = Object.keys(session.jobs)
+        for (const id of jobIds.slice(0, Math.max(0, jobIds.length - 100))) delete session.jobs[id]
+      })().catch(error => console.error(error)).finally(() => {
+        store.unpin(current.id)
+        return store.flush()
+      })
+      config.waitUntil?.(work)
     } catch (error) {
-      if (!res.headersSent) next(error)
+      next(error)
     }
   })
 
@@ -448,6 +541,14 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
     try {
       const job = requireSession(req).session.jobs[req.params.jobId]
       if (!job) throw apiError(404, 'JOB_NOT_FOUND', 'Yeh upload job nahi mili (shayad purani ho chuki hai).')
+      // A serverless function that hit its time limit never reports back; don't leave the job spinning forever.
+      if (job.status === 'running' && config.jobTimeoutMs && Date.now() - job.createdAt > config.jobTimeoutMs) {
+        job.status = 'failed'
+        for (const entry of Object.values(job.platforms)) {
+          if (['done', 'failed'].includes(entry.status)) continue
+          Object.assign(entry, { status: 'failed', error: 'Server ki time limit khatam ho gayi. Platform par check karein ke post hui ya nahi, phir dobara try karein.' })
+        }
+      }
       res.json({ job })
     } catch (error) { next(error) }
   })
