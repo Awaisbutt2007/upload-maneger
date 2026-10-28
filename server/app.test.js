@@ -139,6 +139,9 @@ test('credential form merges secrets into the env file without returning them', 
     assert.doesNotMatch(env, /"old"/)
     assert.match(env, /GOOGLE_CLIENT_SECRET="google-secret"/)
     assert.equal((await fetch(`${baseUrl}/api/health`).then(result => result.json())).tiktokConfigured, true)
+    const status = await fetch(`${baseUrl}/api/platforms`).then(result => result.text())
+    assert.equal(JSON.parse(status).providers.find(provider => provider.id === 'tiktok').clientId, 'client123')
+    assert.equal(status.includes('secret-value'), false)
 
     const invalid = await save('tiktok', { clientKey: 'client123', clientSecret: 'secret-value', redirectUri: 'http://localhost:3001/incorrect-callback' })
     assert.equal(invalid.status, 400)

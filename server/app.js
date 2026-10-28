@@ -240,6 +240,8 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
           label: provider.label,
           platforms: provider.platforms,
           configured: isConfigured(provider.id),
+          // The client ID/key is public (it is part of the OAuth URL); the secret never leaves the server.
+          clientId: providerConfigs[provider.id].clientId || '',
           accountLinked: Boolean(current?.session.accounts[provider.id]),
           redirectUri: redirectUriFor(provider.id, req),
           developerUrl: provider.developerUrl,

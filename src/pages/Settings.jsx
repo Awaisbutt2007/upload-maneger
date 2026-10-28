@@ -33,7 +33,7 @@ function ProviderCard({ provider, platforms, canConfigure, showToast, refreshPla
   const anyConnected = linkedPlatforms.some(item => item.info.connected)
   const [expanded, setExpanded] = useState(!provider.configured)
   const [busy, setBusy] = useState('')
-  const [form, setForm] = useState({ clientId: '', clientSecret: '' })
+  const [form, setForm] = useState({ clientId: provider.clientId || '', clientSecret: '' })
   const [secretVisible, setSecretVisible] = useState(false)
   const help = PROVIDER_HELP[provider.id]
   const MainIcon = linkedPlatforms[0].meta.Icon
@@ -68,7 +68,7 @@ function ProviderCard({ provider, platforms, canConfigure, showToast, refreshPla
     setBusy('config')
     try {
       await api(`/api/${provider.id}/config`, { method: 'POST', body: form })
-      setForm({ clientId: '', clientSecret: '' })
+      setForm(previous => ({ ...previous, clientSecret: '' }))
       await refreshPlatforms()
       showToast(`${provider.label} credentials save ho gayi. Ab Connect dabayein.`, 'ok')
     } catch (error) {
@@ -198,7 +198,7 @@ function ProviderCard({ provider, platforms, canConfigure, showToast, refreshPla
                     autoComplete="new-password"
                     value={form.clientSecret}
                     onChange={event => setForm(previous => ({ ...previous, clientSecret: event.target.value }))}
-                    placeholder="Server par save hoga, browser mein nahi"
+                    placeholder={provider.configured ? '•••••••• saved (security ke liye chhupa hai) — badalne ke liye naya dalein' : 'Server par save hoga, browser mein nahi'}
                     required
                   />
                   <button type="button" className="adv-suffix-btn" onClick={() => setSecretVisible(value => !value)} title={secretVisible ? 'Hide secret' : 'Show secret'} aria-label={secretVisible ? 'Hide secret' : 'Show secret'}>
