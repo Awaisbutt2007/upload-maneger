@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { apiError, requestJson, sleep } from '../http.js'
+import { apiError, refreshOnce, requestJson, sleep } from '../http.js'
 import { captionFor } from '../caption.js'
 
 const API = 'https://api.x.com/2'
@@ -70,12 +70,15 @@ export const x = {
 
   async ensureToken(ctx, account) {
     if (account.expiresAt > Date.now() + 60_000) return account
-    if (!account.refreshToken) throw apiError(401, 'X_RECONNECT_REQUIRED', 'X session expire ho gayi. Dobara connect karein.')
-    const tokens = await tokenRequest(ctx, { grant_type: 'refresh_token', refresh_token: account.refreshToken })
-    account.accessToken = tokens.access_token
-    account.refreshToken = tokens.refresh_token || account.refreshToken
-    account.expiresAt = Date.now() + (Number(tokens.expires_in) || 0) * 1000
-    return account
+    const reconnect = apiError(401, 'X_RECONNECT_REQUIRED', 'X ne access wapas le liya. Dobara connect karein.')
+    if (!account.refreshToken) throw reconnect
+    return refreshOnce(account, async () => {
+      const tokens = await tokenRequest(ctx, { grant_type: 'refresh_token', refresh_token: account.refreshToken })
+      account.accessToken = tokens.access_token
+      account.refreshToken = tokens.refresh_token || account.refreshToken
+      account.expiresAt = Date.now() + (Number(tokens.expires_in) || 0) * 1000
+      return account
+    }, reconnect)
   },
 
   async describe(ctx, account) {

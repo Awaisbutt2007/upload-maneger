@@ -1,4 +1,4 @@
-import { apiError, platformErrorMessage, readJson, requestJson } from '../http.js'
+import { apiError, platformErrorMessage, readJson, refreshOnce, requestJson } from '../http.js'
 import { captionFor } from '../caption.js'
 
 const SCOPES = 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly'
@@ -58,16 +58,20 @@ export const youtube = {
 
   async ensureToken(ctx, account) {
     if (account.expiresAt > Date.now() + 60_000) return account
-    if (!account.refreshToken) throw apiError(401, 'YOUTUBE_RECONNECT_REQUIRED', 'YouTube session expire ho gayi. Dobara connect karein.')
-    const tokens = await tokenRequest(ctx, {
-      client_id: ctx.config.clientId,
-      client_secret: ctx.config.clientSecret,
-      refresh_token: account.refreshToken,
-      grant_type: 'refresh_token',
-    })
-    account.accessToken = tokens.access_token
-    account.expiresAt = Date.now() + (Number(tokens.expires_in) || 0) * 1000
-    return account
+    const reconnect = apiError(401, 'YOUTUBE_RECONNECT_REQUIRED', 'Google ne YouTube access wapas le liya. Dobara connect karein.')
+    if (!account.refreshToken) throw reconnect
+    return refreshOnce(account, async () => {
+      const tokens = await tokenRequest(ctx, {
+        client_id: ctx.config.clientId,
+        client_secret: ctx.config.clientSecret,
+        refresh_token: account.refreshToken,
+        grant_type: 'refresh_token',
+      })
+      account.accessToken = tokens.access_token
+      account.refreshToken = tokens.refresh_token || account.refreshToken
+      account.expiresAt = Date.now() + (Number(tokens.expires_in) || 0) * 1000
+      return account
+    }, reconnect)
   },
 
   async describe(ctx, account) {

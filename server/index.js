@@ -23,6 +23,7 @@ const app = createApp({
     maxUploadBytes: Number(env.MAX_UPLOAD_MB) > 0 ? Number(env.MAX_UPLOAD_MB) * 1024 * 1024 : undefined,
     secureCookies: env.NODE_ENV === 'production',
     allowConfigWrite: env.NODE_ENV !== 'production',
+    keepAliveOnStart: true,
   },
 })
 

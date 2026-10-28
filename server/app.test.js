@@ -419,3 +419,79 @@ test('Meta, LinkedIn and X publish flows run end to end against mocked APIs', as
     await stopServer(server)
   }
 })
+
+test('a linked TikTok account stays connected until the user disconnects it', async () => {
+  let mode = 'ok'
+  const base = tiktokApi([])
+  const dataDir = await mkdtemp(join(tmpdir(), 'platform-manager-keep-'))
+  // Tokens come back already expired, so every status check goes through a refresh.
+  const fetchImpl = combine(async (url, options) => {
+    if (!String(url).endsWith('/v2/oauth/token/')) return base(url, options)
+    if (new URLSearchParams(options.body).get('grant_type') === 'authorization_code') {
+      return Response.json({ access_token: 'access', refresh_token: 'refresh', expires_in: 0, open_id: 'open-id', scope: 'user.info.basic,video.publish' })
+    }
+    if (mode === 'down') throw new TypeError('fetch failed')
+    if (mode === 'revoked') return Response.json({ error: 'invalid_grant', error_description: 'Refresh token is invalid or expired.' }, { status: 400 })
+    return Response.json({ access_token: 'fresh-access', refresh_token: 'rotated-refresh', expires_in: 0, scope: 'user.info.basic,video.publish' })
+  })
+  const { server, baseUrl } = await startServer(createApp({
+    config: { providers: { tiktok: { clientId: 'tiktok-key', clientSecret: 'tiktok-secret' } }, dataDir },
+    fetchImpl,
+  }))
+
+  try {
+    const start = await fetch(`${baseUrl}/api/tiktok/oauth/start`, { method: 'POST' })
+    assert.match(start.headers.get('set-cookie'), /Max-Age=34560000/)
+    const { cookie } = await connect(baseUrl, 'tiktok')
+    const status = () => fetch(`${baseUrl}/api/platforms`, { headers: { cookie } }).then(response => response.json())
+    assert.equal((await status()).platforms.tiktok.connected, true)
+
+    mode = 'down'
+    const offline = (await status()).platforms.tiktok
+    assert.equal(offline.connected, true, 'network failure must not look like a disconnect')
+    assert.equal(offline.username, 'awais.butt.official')
+    assert.match(offline.error.message, /connected hai/)
+
+    mode = 'revoked'
+    const revoked = await status()
+    assert.equal(revoked.platforms.tiktok.connected, false)
+    assert.equal(revoked.platforms.tiktok.error.code, 'TIKTOK_RECONNECT_REQUIRED')
+    assert.equal(revoked.providers.find(provider => provider.id === 'tiktok').accountLinked, true, 'the app never unlinks on its own')
+
+    mode = 'ok'
+    assert.equal((await status()).platforms.tiktok.connected, true)
+    const disconnected = await fetch(`${baseUrl}/api/tiktok/disconnect`, { method: 'POST', headers: { cookie } }).then(response => response.json())
+    assert.equal(disconnected.connected, false)
+    const after = await status()
+    assert.equal(after.platforms.tiktok.connected, false)
+    assert.equal(after.providers.find(provider => provider.id === 'tiktok').accountLinked, false)
+  } finally {
+    await stopServer(server)
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('token refresh runs once for parallel callers and only invalid_grant asks to reconnect', async () => {
+  const { tiktok } = await import('./providers/tiktok.js')
+  let refreshes = 0
+  let reply = { access_token: 'fresh-access', refresh_token: 'rotated-refresh', expires_in: 86400, refresh_expires_in: 31536000 }
+  const ctx = {
+    config: { clientId: 'key', clientSecret: 'secret' },
+    fetch: async () => {
+      refreshes++
+      await new Promise(resolve => setTimeout(resolve, 10))
+      return Response.json(reply, { status: reply.error ? 400 : 200 })
+    },
+  }
+  const account = { accessToken: 'old', refreshToken: 'first-refresh', expiresAt: Date.now() - 1 }
+  await Promise.all([tiktok.ensureToken(ctx, account), tiktok.ensureToken(ctx, account), tiktok.ensureToken(ctx, account)])
+  assert.equal(refreshes, 1)
+  assert.equal(account.refreshToken, 'rotated-refresh')
+  assert.ok(account.refreshExpiresAt > Date.now() + 300 * 24 * 60 * 60_000)
+
+  account.expiresAt = 0
+  reply = { error: 'server_error', error_description: 'try later' }
+  await assert.rejects(tiktok.ensureToken(ctx, account), error => error.status === 502)
+  reply = { error: 'invalid_grant', error_description: 'Refresh token is invalid or expired.' }
+  await assert.rejects(tiktok.ensureToken(ctx, account), error => error.status === 401 && error.code === 'TIKTOK_RECONNECT_REQUIRED')
+})

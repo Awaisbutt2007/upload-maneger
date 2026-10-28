@@ -98,7 +98,9 @@ export const meta = {
     return account
   },
 
+  // Page tokens from a long-lived user token never expire, so posting keeps working after the 60-day user token lapses.
   async ensureToken(_ctx, account) {
+    if (account.pages?.some(page => page.accessToken)) return account
     if (account.expiresAt && account.expiresAt < Date.now()) {
       throw apiError(401, 'META_RECONNECT_REQUIRED', 'Facebook/Instagram session expire ho gayi. Dobara connect karein.')
     }

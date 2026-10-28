@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { apiError, readJson, sleep } from '../http.js'
+import { apiError, readJson, refreshOnce, sleep } from '../http.js'
 import { captionFor } from '../caption.js'
 
 const API = 'https://open.tiktokapis.com'
@@ -30,7 +30,9 @@ async function exchangeToken(ctx, body) {
   })
   const payload = await readJson(response)
   if (!response.ok || payload.error || !payload.access_token) {
-    throw apiError(502, 'TIKTOK_OAUTH_FAILED', payload.error_description || 'TikTok token exchange failed')
+    const error = apiError(502, 'TIKTOK_OAUTH_FAILED', payload.error_description || 'TikTok token exchange failed')
+    error.oauthError = typeof payload.error === 'string' ? payload.error : ''
+    throw error
   }
   return payload
 }
@@ -94,27 +96,33 @@ export const tiktok = {
       openId: tokens.open_id,
       scopes: tokens.scope || '',
       expiresAt: Date.now() + (Number(tokens.expires_in) || 0) * 1000,
+      refreshExpiresAt: tokens.refresh_expires_in ? Date.now() + Number(tokens.refresh_expires_in) * 1000 : null,
     }
   },
 
   async ensureToken(ctx, account) {
     if (account.expiresAt > Date.now() + 60_000) return account
-    if (!account.refreshToken) throw apiError(401, 'TIKTOK_RECONNECT_REQUIRED', 'TikTok session expire ho gayi. Dobara connect karein.')
-    const refreshed = await exchangeToken(ctx, {
-      client_key: ctx.config.clientId,
-      client_secret: ctx.config.clientSecret,
-      grant_type: 'refresh_token',
-      refresh_token: account.refreshToken,
-    })
-    Object.assign(account, {
-      accessToken: refreshed.access_token,
-      refreshToken: refreshed.refresh_token || account.refreshToken,
-      openId: refreshed.open_id || account.openId,
-      scopes: refreshed.scope || account.scopes,
-      expiresAt: Date.now() + (Number(refreshed.expires_in) || 0) * 1000,
-      creatorInfoAt: 0,
-    })
-    return account
+    const reconnect = apiError(401, 'TIKTOK_RECONNECT_REQUIRED', 'TikTok ne access wapas le liya (password change ya app permission remove). Dobara connect karein.')
+    if (!account.refreshToken) throw reconnect
+    return refreshOnce(account, async () => {
+      const refreshed = await exchangeToken(ctx, {
+        client_key: ctx.config.clientId,
+        client_secret: ctx.config.clientSecret,
+        grant_type: 'refresh_token',
+        refresh_token: account.refreshToken,
+      })
+      // Every refresh also renews the 365-day refresh token, so a regularly refreshed account never expires.
+      Object.assign(account, {
+        accessToken: refreshed.access_token,
+        refreshToken: refreshed.refresh_token || account.refreshToken,
+        refreshExpiresAt: refreshed.refresh_expires_in ? Date.now() + Number(refreshed.refresh_expires_in) * 1000 : account.refreshExpiresAt,
+        openId: refreshed.open_id || account.openId,
+        scopes: refreshed.scope || account.scopes,
+        expiresAt: Date.now() + (Number(refreshed.expires_in) || 0) * 1000,
+        creatorInfoAt: 0,
+      })
+      return account
+    }, reconnect)
   },
 
   async creatorInfo(ctx, account) {

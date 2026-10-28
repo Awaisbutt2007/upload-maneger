@@ -4,6 +4,21 @@ export function apiError(status, code, message) {
 
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+const refreshing = new WeakMap()
+
+// One token refresh per account at a time: TikTok and X rotate refresh tokens, so a second
+// parallel refresh would use an already-spent token. Only a token the platform rejected
+// (invalid_grant) turns into "reconnect required"; network blips stay retryable.
+export function refreshOnce(account, refresh, reconnectError) {
+  if (!refreshing.has(account)) {
+    const pending = refresh()
+      .catch(error => { throw error.oauthError === 'invalid_grant' ? reconnectError : error })
+      .finally(() => refreshing.delete(account))
+    refreshing.set(account, pending)
+  }
+  return refreshing.get(account)
+}
+
 // Pulls a human readable message out of the different error shapes the platform APIs return.
 export function platformErrorMessage(payload, fallback) {
   if (!payload || typeof payload !== 'object') return fallback
@@ -29,7 +44,9 @@ export async function requestJson(fetchImpl, url, options, { code, label }) {
   const response = await fetchImpl(url, options)
   const payload = await readJson(response)
   if (!response.ok) {
-    throw apiError(502, code, `${label}: ${platformErrorMessage(payload, `HTTP ${response.status}`)}`)
+    const error = apiError(502, code, `${label}: ${platformErrorMessage(payload, `HTTP ${response.status}`)}`)
+    error.oauthError = typeof payload.error === 'string' ? payload.error : ''
+    throw error
   }
   return { payload, response }
 }

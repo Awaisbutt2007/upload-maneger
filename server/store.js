@@ -49,6 +49,7 @@ export function createSessionStore(dataDir) {
 
   return {
     get: id => sessions.get(id),
+    all: () => [...sessions.values()],
     create(id) {
       const session = { accounts: {}, jobs: {}, uploads: {} }
       sessions.set(id, session)

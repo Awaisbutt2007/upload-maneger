@@ -13,6 +13,9 @@ import { pkcePair } from './providers/x.js'
 const SESSION_COOKIE = 'platform_manager_session'
 const VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm']
 const UPLOAD_TTL_MS = 6 * 60 * 60_000
+// Browsers cap cookies at 400 days; the cookie is re-sent on every visit, so an active user never loses it.
+const SESSION_MAX_AGE_S = 400 * 24 * 60 * 60
+const KEEP_ALIVE_MS = 60 * 60_000
 
 function readCookie(req, name) {
   const entry = (req.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith(`${name}=`))
@@ -21,7 +24,7 @@ function readCookie(req, name) {
 }
 
 function setSessionCookie(res, sessionId, secure) {
-  const flags = [`${SESSION_COOKIE}=${encodeURIComponent(sessionId)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=2592000']
+  const flags = [`${SESSION_COOKIE}=${encodeURIComponent(sessionId)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${SESSION_MAX_AGE_S}`]
   if (secure) flags.push('Secure')
   res.setHeader('Set-Cookie', flags.join('; '))
 }
@@ -73,6 +76,27 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
   }
   for (const id of Object.keys(PROVIDERS)) providerConfigs[id] ||= {}
 
+  // Refreshes every linked account's tokens in the background, so a connection stays alive
+  // even if the app isn't opened for months. Accounts are only removed by /disconnect.
+  const keepAlive = async () => {
+    for (const session of store.all()) {
+      for (const provider of Object.values(PROVIDERS)) {
+        const account = session.accounts?.[provider.id]
+        if (!account || !isConfigured(provider.id)) continue
+        try {
+          await provider.ensureToken(contextFor(provider.id), account)
+          delete account.reconnectRequired
+        } catch (error) {
+          if (error.status === 401) account.reconnectRequired = { code: error.code, message: error.message }
+        }
+      }
+    }
+    store.persist()
+  }
+  const keepAliveTimer = setInterval(() => { keepAlive().catch(() => {}) }, KEEP_ALIVE_MS)
+  keepAliveTimer.unref()
+  if (config.keepAliveOnStart) keepAlive().catch(() => {})
+
   const sweep = setInterval(() => {
     const now = Date.now()
     for (const [key, value] of oauthStates) if (now > value.expiresAt) oauthStates.delete(key)
@@ -98,6 +122,11 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
       session = store.create(id)
     }
     if (session) {
+      if (!session.cookieRenewedAt || Date.now() - session.cookieRenewedAt > 24 * 60 * 60_000) {
+        session.cookieRenewedAt = Date.now()
+        req.renewSession = id
+        store.persist()
+      }
       session.accounts ||= {}
       session.jobs ||= {}
       session.uploads ||= {}
@@ -123,10 +152,17 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
       if (!account) return
       try {
         const described = await provider.describe(contextFor(provider.id), account)
+        account.lastStatus = described
+        delete account.reconnectRequired
         for (const [platform, info] of Object.entries(described)) platforms[platform] = { ...platforms[platform], ...info }
       } catch (error) {
+        if (error.status === 401) account.reconnectRequired = { code: error.code, message: error.message }
         for (const platform of provider.platforms) {
-          platforms[platform] = { ...platforms[platform], connected: false, error: { code: error.code || 'STATUS_ERROR', message: error.message } }
+          // A temporary platform/network failure must not look like a disconnect: keep showing the last known account.
+          const last = error.status === 401 ? null : account.lastStatus?.[platform]
+          platforms[platform] = last?.connected
+            ? { ...platforms[platform], ...last, error: { code: error.code || 'STATUS_ERROR', message: `Account connected hai, lekin ${provider.label} se abhi status nahi mila: ${error.message}` } }
+            : { ...platforms[platform], connected: false, error: { code: error.code || 'STATUS_ERROR', message: error.message } }
         }
       }
     }))
@@ -136,6 +172,12 @@ export function createApp({ config = {}, fetchImpl = fetch, configFile = resolve
 
   app.disable('x-powered-by')
   app.use(express.json({ limit: '64kb' }))
+  // Slides the session cookie's expiry forward (at most once a day) so linked accounts survive indefinitely.
+  app.use((req, res, next) => {
+    if (readCookie(req, SESSION_COOKIE)) getSession(req)
+    if (req.renewSession) setSessionCookie(res, req.renewSession, Boolean(config.secureCookies))
+    next()
+  })
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, tiktokConfigured: isConfigured('tiktok') })
